@@ -1,0 +1,201 @@
+name: Release
+
+"on":
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write  # needed to create the GitHub Release + upload assets
+
+jobs:
+  build:
+    name: Build ${{ matrix.target_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_name: darwin-arm64
+            runs_on: macos-latest
+            rust_target: aarch64-apple-darwin
+          - target_name: linux-x64
+            runs_on: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+          - target_name: linux-arm64
+            runs_on: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runs_on }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install stable
+          rustup target add ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-${{ matrix.target_name }}"
+
+      - name: Build release binaries
+        run: cargo build --release --bin jj-gt --target ${{ matrix.rust_target }}
+
+      - name: Stage artifacts
+        id: stage
+        run: |
+          stage="$RUNNER_TEMP/jj-gt-${{ github.ref_name }}-${{ matrix.target_name }}"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.rust_target }}/release/jj-gt" "$stage/"
+          cp README.md LICENSE "$stage/" 2>/dev/null || true
+          echo "dir=$stage" >> "$GITHUB_OUTPUT"
+
+      # Ad-hoc codesigning on macOS so the binary doesn't get the
+      # "downloaded from internet" quarantine warning when first run.
+      # Real Developer-ID signing would require an Apple cert pair in
+      # GitHub secrets — out of scope for an MVP-stage tool.
+      - name: Codesign (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          codesign -s - "${{ steps.stage.outputs.dir }}/jj-gt"
+
+      - name: Tar + checksum
+        id: pack
+        run: |
+          stage="${{ steps.stage.outputs.dir }}"
+          cd "$(dirname "$stage")"
+          base="$(basename "$stage")"
+          tar -czf "$base.tar.gz" "$base"
+          shasum -a 256 "$base.tar.gz" > "$base.tar.gz.sha256"
+          echo "tarball=$(dirname "$stage")/$base.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "checksum=$(dirname "$stage")/$base.tar.gz.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: jj-gt-${{ github.ref_name }}-${{ matrix.target_name }}
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.checksum }}
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' \) -exec cp {} release/ \;
+          ls -la release
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --notes "Release ${{ github.ref_name }}." \
+            --verify-tag \
+            release/jj-gt-*.tar.gz \
+            release/jj-gt-*.sha256
+
+  bump-tap:
+    name: Bump Homebrew tap formula
+    needs: publish
+    runs-on: ubuntu-latest
+    # Skip on pre-releases (rc/alpha/beta) — tap should track stable only.
+    if: ${{ !contains(github.ref_name, '-') }}
+    steps:
+      - name: Download release checksums
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Extract per-platform SHA256s
+        id: shas
+        run: |
+          set -euo pipefail
+          for slug in darwin-arm64 linux-x64 linux-arm64; do
+              file="artifacts/jj-gt-${{ github.ref_name }}-${slug}/jj-gt-${{ github.ref_name }}-${slug}.tar.gz.sha256"
+              sha=$(awk '{print $1}' "$file")
+              echo "${slug}=${sha}" >> "$GITHUB_OUTPUT"
+          done
+
+      # Check out the tap repo using a PAT with `contents:write` on
+      # mattwilkinsonn/homebrew-tap. The PAT must be saved as the
+      # `HOMEBREW_TAP_TOKEN` secret on this repo.
+      - name: Checkout tap
+        uses: actions/checkout@v5
+        with:
+          repository: mattwilkinsonn/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Rewrite formula
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re, os
+          version = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          shas = {
+              "darwin-arm64": "${{ steps.shas.outputs.darwin-arm64 }}",
+              "linux-x64":   "${{ steps.shas.outputs.linux-x64 }}",
+              "linux-arm64": "${{ steps.shas.outputs.linux-arm64 }}",
+          }
+          path = "tap/Formula/jj-gt.rb"
+          with open(path) as f:
+              text = f.read()
+          text = re.sub(r'^  version ".*"$', f'  version "{version}"', text, flags=re.M)
+          for slug, sha in shas.items():
+              pattern = re.compile(
+                  rf'(url\s+"[^"]*-{slug}\.tar\.gz"\s*\n\s+sha256\s+)"[^"]*"'
+              )
+              text = pattern.sub(rf'\1"{sha}"', text)
+          with open(path, "w") as f:
+              f.write(text)
+          PY
+
+      - name: Commit + push
+        working-directory: tap
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+              echo "nothing to bump"
+              exit 0
+          fi
+          git add Formula/jj-gt.rb
+          git commit -m "jj-gt ${GITHUB_REF_NAME}"
+          git push
+
+  publish-crate:
+    name: Publish to crates.io
+    needs: [publish, bump-tap]
+    runs-on: ubuntu-latest
+    # Skip on pre-releases (rc/alpha/beta) so we don't burn a version
+    # number on crates.io for something users shouldn't binstall.
+    if: ${{ !contains(github.ref_name, '-') }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install stable
+
+      # `cargo publish` is irreversible (versions can be yanked but never
+      # republished), so it goes last in the release sequence — only
+      # after the GitHub Release exists and the Homebrew formula bump
+      # succeeds. If any earlier step fails, this one doesn't run and
+      # the version number is preserved for a retry.
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked

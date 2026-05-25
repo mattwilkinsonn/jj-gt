@@ -1,0 +1,60 @@
+[package]
+name = "jj-gt"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Bridge jj bookmark stacks and Graphite (gt) PR stacks — one command per stack submit/fetch/status"
+repository = "https://github.com/mattwilkinsonn/jj-gt"
+readme = "README.md"
+
+# cargo-binstall metadata. `cargo binstall jj-gt` will fetch the release
+# tarball matching the user's platform from our GitHub Releases page, untar
+# it, and drop the binary into ~/.cargo/bin. The friendly slug names
+# (darwin-arm64, linux-x64, linux-arm64) come from .github/workflows/release.yml
+# — keep them aligned with that file.
+[package.metadata.binstall]
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/jj-gt-v{ version }-linux-x64.tar.gz"
+bin-dir = "jj-gt-v{ version }-linux-x64/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/jj-gt-v{ version }-linux-arm64.tar.gz"
+bin-dir = "jj-gt-v{ version }-linux-arm64/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/jj-gt-v{ version }-darwin-arm64.tar.gz"
+bin-dir = "jj-gt-v{ version }-darwin-arm64/{ bin }{ binary-ext }"
+
+[[bin]]
+name = "jj-gt"
+path = "src/main.rs"
+
+[lib]
+name = "jj_gt"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.6.1", features = ["derive", "env"] }
+clap_complete = { version = "4.6.5", features = ["unstable-dynamic"] }
+# Hooks runner shared with jj-hp. Published on crates.io as `jj-hooks`.
+# 0.2.0 lifted `run_for_revset` + `run_for_revset_outcome` to the public
+# library surface — required by jj-gt's hooks.rs wrapper.
+jj_hooks = { package = "jj-hooks", version = "0.2.0" }
+regex = "1.12.3"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.145"
+thiserror = "2.0.18"
+toml = "1.1.2"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+indoc = "2.0.6"
+tempfile = "3.27.0"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
