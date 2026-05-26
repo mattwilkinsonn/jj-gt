@@ -42,8 +42,18 @@ pub fn bookmarks_in_revset(jj: &JjCli, revset: &str) -> Result<Vec<String>> {
     Ok(unique_lines(&out))
 }
 
-/// `jj bookmark list -T 'name ++ " " ++ commit_id.short(12) ++ "\n"'
-///                   --ignore-working-copy`
+/// `jj bookmark list --ignore-working-copy
+///   -T 'name ++ " " ++ if(self.normal_target(),
+///                          self.normal_target().commit_id().short(12),
+///                          "") ++ "\n"'`
+///
+/// Why the if-guard: bookmark templates expose `normal_target()` as
+/// an `Option<Commit>` — `None` for conflicted or pure-deletion
+/// entries. Unwrapping it directly would template-error on the
+/// conflict case, so we fall through to an empty commit-id string
+/// and skip the entry below in the parser. There's no top-level
+/// `commit_id` keyword in the bookmark scope (that exists on the
+/// commit scope used by `jj log` templates).
 pub fn list_local_bookmarks(jj: &JjCli) -> Result<Vec<LocalBookmark>> {
     let out = jj_run(
         jj,
@@ -51,7 +61,7 @@ pub fn list_local_bookmarks(jj: &JjCli) -> Result<Vec<LocalBookmark>> {
             "bookmark",
             "list",
             "-T",
-            r#"name ++ " " ++ commit_id.short(12) ++ "\n""#,
+            r#"name ++ " " ++ if(self.normal_target(), self.normal_target().commit_id().short(12), "") ++ "\n""#,
             "--ignore-working-copy",
         ],
     )?;
@@ -63,6 +73,10 @@ pub fn list_local_bookmarks(jj: &JjCli) -> Result<Vec<LocalBookmark>> {
         }
         let mut parts = line.split_whitespace();
         let (Some(name), Some(commit_id)) = (parts.next(), parts.next()) else {
+            // Conflict-target bookmark (name printed, commit_id
+            // empty). Skip — callers don't need to act on conflicts
+            // here; jj will surface the conflict via its own UI on
+            // any operation that actually depends on the target.
             continue;
         };
         bookmarks.push(LocalBookmark {
@@ -152,12 +166,58 @@ pub fn track_bookmark_on_remote(jj: &JjCli, bookmark: &str, remote: &str) -> Res
     Ok(())
 }
 
+/// Outcome of a `jj rebase` invocation that exits 0 — broken out
+/// because jj treats "rebased successfully but the result contains
+/// conflict markers" as a success exit code, and the only signal is
+/// stderr text like `New conflicts appeared in N commits`. Callers
+/// (cleanup step 7) need to surface that to the user as a distinct
+/// CleanupAction, not silently log it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RebaseOutcome {
+    /// Clean rebase; no conflict markers introduced.
+    Clean,
+    /// jj rebased without erroring but the result has new conflicts.
+    /// `message` carries the relevant stderr line(s) so the caller
+    /// can echo them back to the user.
+    Conflicted { message: String },
+    /// jj decided nothing needed to change (already-in-place).
+    NoOp,
+}
+
 /// `jj rebase -s <source_revset> -d <dest>`. Used by `jj-gt fetch`'s
 /// orphan-restack step in place of `gt restack` (whose git-rebase
 /// rewrites jj-tracked SHAs and confuses jj's ref reconciliation).
-pub fn rebase(jj: &JjCli, source_revset: &str, dest: &str) -> Result<()> {
-    let _ = jj_run(jj, &["rebase", "-s", source_revset, "-d", dest])?;
-    Ok(())
+///
+/// Returns `RebaseOutcome::Conflicted` when jj exits 0 *but* its
+/// stderr mentions newly-introduced conflicts — jj's CLI doesn't
+/// surface this as a non-zero exit, and the only way to detect it
+/// from a subprocess is by sniffing the human message. Failing
+/// loudly here is the difference between the user noticing a broken
+/// stack now vs noticing it three commits later.
+pub fn rebase(jj: &JjCli, source_revset: &str, dest: &str) -> Result<RebaseOutcome> {
+    let combined = jj
+        .run_capture_stderr(&["rebase", "-s", source_revset, "-d", dest])
+        .map_err(JjGtError::Hooks)?;
+
+    if combined.contains("Nothing changed.") || combined.contains("Skipped rebase") {
+        // jj prints "Nothing changed." when the rebase is a no-op
+        // (the bookmark is already on dest's ancestry). Treat as
+        // NoOp so cleanup doesn't claim it rebased something it
+        // didn't.
+        return Ok(RebaseOutcome::NoOp);
+    }
+    if combined.contains("New conflicts appeared") {
+        // Carry the most relevant stderr line back to the caller so
+        // the printed CleanupAction includes the same wording jj
+        // itself used.
+        let message = combined
+            .lines()
+            .find(|l| l.contains("New conflicts appeared"))
+            .unwrap_or("New conflicts appeared in rebased commits")
+            .to_owned();
+        return Ok(RebaseOutcome::Conflicted { message });
+    }
+    Ok(RebaseOutcome::Clean)
 }
 
 /// `jj bookmark delete <name>`.

@@ -25,6 +25,27 @@ fn binary_available(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Isolate this test's gt user-config from the global
+/// `~/.config/graphite/user_config`. nextest spawns each test in its
+/// own process, so setting `XDG_CONFIG_HOME` is safe (no thread
+/// race) but other parallel tests would otherwise hammer the shared
+/// config file — concurrent writes truncate it mid-stream and the
+/// next gt invocation errors with "Malformed JSON". The src/gt.rs
+/// `run_gt` helper checks for `JJ_GT_TEST_XDG_CONFIG_HOME` and
+/// propagates it through to gt so both the test-direct invocations
+/// (gt_cli) and the library-level ones (jj_gt::gt::track) end up
+/// pointed at the same per-test config dir.
+fn isolate_graphite_config(tmp: &Path) {
+    let xdg = tmp.join(".xdg-config");
+    std::fs::create_dir_all(&xdg).unwrap();
+    // Safety: nextest runs each test in its own process, so set_var
+    // doesn't race with anything else in the binary.
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", &xdg);
+        std::env::set_var("JJ_GT_TEST_XDG_CONFIG_HOME", &xdg);
+    }
+}
+
 fn jj(cwd: &Path, args: &[&str]) {
     let out = Command::new("jj")
         .args(args)
@@ -82,6 +103,7 @@ fn git_capture(cwd: &Path, args: &[&str]) -> String {
 /// ```
 fn build_three_stack_fixture() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
+    isolate_graphite_config(tmp.path());
     jj(tmp.path(), &["git", "init", "--colocate"]);
     jj(
         tmp.path(),
@@ -113,17 +135,36 @@ fn gt_init(tmp: &Path) {
 /// `refs/branch-metadata/<branch>`. Returns None if the ref doesn't
 /// exist; panics on a malformed blob (since that signals gt itself
 /// changed shape and we want to catch it loudly).
+///
+/// Uses `git for-each-ref` rather than `git rev-parse --verify` so
+/// we work uniformly across git backends (loose refs, packed-refs,
+/// reftable) and across macOS / Linux git builds — a previous
+/// `--verify --quiet` probe returned exit 1 on macOS even when the
+/// ref existed (cause not fully understood; for-each-ref sidesteps
+/// it). On the failure path we dump the full set of branch-metadata
+/// refs so a future debugger isn't guessing.
 fn parent_in_metadata(workspace_root: &Path, branch: &str) -> Option<String> {
-    let ref_name = format!("refs/branch-metadata/{branch}");
-    let out = Command::new("git")
-        .args(["rev-parse", "--verify", "--quiet", &ref_name])
-        .current_dir(workspace_root)
-        .output()
-        .unwrap();
-    if !out.status.success() {
-        return None;
-    }
-    let oid = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    let listing = git_capture(
+        workspace_root,
+        &[
+            "for-each-ref",
+            "--format=%(refname) %(objectname)",
+            "refs/branch-metadata/",
+        ],
+    );
+    let target_ref = format!("refs/branch-metadata/{branch}");
+    let oid = listing
+        .lines()
+        .find_map(|line| {
+            let mut parts = line.split_whitespace();
+            let name = parts.next()?;
+            let oid = parts.next()?;
+            (name == target_ref).then(|| oid.to_owned())
+        })
+        .or_else(|| {
+            eprintln!("parent_in_metadata: no ref `{target_ref}`; full listing:\n{listing}");
+            None
+        })?;
     let blob = git_capture(workspace_root, &["cat-file", "-p", &oid]);
     // Tiny JSON probe — avoid pulling serde_json into the test deps;
     // the field shape is stable enough to substring-match for the

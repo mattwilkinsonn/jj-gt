@@ -33,7 +33,27 @@ install-deps:
             uv tool install pre-commit
             uv tool install prek
 
-            lefthook_version=2.1.6
+            # Resolve latest stable tags via the github redirect (no
+            # gh / jq dependency, no API auth needed). `/releases/latest`
+            # 302-redirects to `/releases/tag/<latest>`; we read the
+            # Location header.  This means we self-heal when upstream
+            # rolls forward (no more pinned-version 404 surprise) at
+            # the cost of one CI run potentially seeing a different
+            # version than the last — acceptable for tools we just
+            # need on PATH.
+            resolve_latest() {
+                local owner_repo="$1"
+                curl -sI "https://github.com/${owner_repo}/releases/latest" \
+                    | awk 'BEGIN{IGNORECASE=1} /^location:/ {sub(/\r$/,"",$2); n=split($2,p,"/"); print p[n]}'
+            }
+
+            lefthook_version=$(resolve_latest evilmartians/lefthook)
+            lefthook_version_bare="${lefthook_version#v}"
+            actionlint_version=$(resolve_latest rhysd/actionlint)
+            actionlint_version_bare="${actionlint_version#v}"
+            gh_version=$(resolve_latest cli/cli)
+            gh_version_bare="${gh_version#v}"
+
             arch="$(uname -m)"
             case "$arch" in
                 x86_64)  lefthook_arch=x86_64; actionlint_arch=amd64; gh_arch=amd64 ;;
@@ -43,14 +63,17 @@ install-deps:
                     exit 1
                     ;;
             esac
-            curl -fsSL "https://github.com/evilmartians/lefthook/releases/download/v${lefthook_version}/lefthook_${lefthook_version}_Linux_${lefthook_arch}" \
+            curl -fsSL "https://github.com/evilmartians/lefthook/releases/download/${lefthook_version}/lefthook_${lefthook_version_bare}_Linux_${lefthook_arch}" \
                 -o "$bin_dir/lefthook"
             chmod +x "$bin_dir/lefthook"
 
-            actionlint_version=1.7.12
-            curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${actionlint_version}/actionlint_${actionlint_version}_linux_${actionlint_arch}.tar.gz" \
+            curl -fsSL "https://github.com/rhysd/actionlint/releases/download/${actionlint_version}/actionlint_${actionlint_version_bare}_linux_${actionlint_arch}.tar.gz" \
                 | tar -xz -C "$bin_dir" actionlint
 
+            # pkl stays pinned because apple/pkl tags aren't `v`-
+            # prefixed and the release artefact names also vary
+            # (linux-amd64 vs linux-aarch64 without the dash patterns
+            # the resolver helper assumes). Bump manually if needed.
             pkl_version=0.31.1
             case "$arch" in
                 x86_64)  pkl_arch=amd64 ;;
@@ -61,9 +84,8 @@ install-deps:
             chmod +x "$bin_dir/pkl"
 
             # gh ships a prebuilt tarball. Extract just the binary.
-            gh_version=2.84.0
-            curl -fsSL "https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_${gh_arch}.tar.gz" \
-                | tar -xz --strip-components=2 -C "$bin_dir" "gh_${gh_version}_linux_${gh_arch}/bin/gh"
+            curl -fsSL "https://github.com/cli/cli/releases/download/${gh_version}/gh_${gh_version_bare}_linux_${gh_arch}.tar.gz" \
+                | tar -xz --strip-components=2 -C "$bin_dir" "gh_${gh_version_bare}_linux_${gh_arch}/bin/gh"
 
             if command -v npm >/dev/null 2>&1; then
                 npm config set prefix "$(dirname "$bin_dir")"

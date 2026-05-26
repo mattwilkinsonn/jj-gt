@@ -12,7 +12,7 @@ use crate::error::Result;
 use crate::gh::{self, PrInfo, PrState};
 use crate::gt;
 use crate::jj::{self, JjCli, LocalBookmark, list_local_bookmarks};
-use crate::stack::{BookmarkOrTrunk, derive_parents};
+use crate::stack::{BookmarkOrTrunk, StackedBookmark, derive_parents};
 
 #[derive(Debug, Clone)]
 pub struct FetchOpts {
@@ -61,6 +61,21 @@ pub enum CleanupAction {
         pr: u32,
         local_sha: String,
         pushed_sha: String,
+    },
+    /// Step 7: this bookmark's tracked parent was removed by `gt
+    /// sync` (its PR landed and Graphite cleaned the source branch)
+    /// so we rebased its commits onto `dest` to keep the stack
+    /// linear. The previous parent name is preserved for the user
+    /// to see why the rebase happened.
+    Rebased { onto: String, prev_parent: String },
+    /// Same trigger as `Rebased`, but `jj rebase` reported the
+    /// resulting commit(s) as conflicted. We don't roll back —
+    /// jj's conflict markers stay in the working tree and the user
+    /// runs `jj resolve` to clean up.
+    RebaseConflicted {
+        onto: String,
+        prev_parent: String,
+        message: String,
     },
     /// PR still open and local matches pushed; leave alone.
     LeftAlone,
@@ -185,15 +200,23 @@ pub fn run_fetch(
         gh::find_prs_for_branches(workspace_root, &names, 200)?
     };
 
+    // Derive stack structure once — both the backfill step (step 2)
+    // and the orphan-detection step (step 7) need to know
+    // (bookmark → parent) pairs derived from the pre-sync world. If
+    // we re-derived after gt sync ran, we'd lose the parent edges
+    // for any bookmark sync deleted, which is exactly the signal
+    // step 7 needs.
+    let pre_sync_stacked = derive_parents(
+        jj,
+        &normal.iter().map(|b| b.name.clone()).collect::<Vec<_>>(),
+        &opts.trunk,
+    )?;
+    let bookmarks_before_sync = normal.clone();
+
     // 2. Backfill metadata refs for bookmarks that have a PR. Sort
     // bottom→top so gt accepts each parent reference.
     if !opts.no_backfill {
-        let stacked = derive_parents(
-            jj,
-            &normal.iter().map(|b| b.name.clone()).collect::<Vec<_>>(),
-            &opts.trunk,
-        )?;
-        let stacked = crate::stack::sort_for_tracking(&stacked);
+        let stacked = crate::stack::sort_for_tracking(&pre_sync_stacked);
         for sb in &stacked {
             let has_pr = normal_prs.iter().any(|p| p.head_ref_name == sb.name);
             if !has_pr {
@@ -263,23 +286,156 @@ pub fn run_fetch(
         }
     }
 
-    // 7. Orphan-restack via `jj rebase` for bookmarks whose parent
-    // got cleaned up. Best-effort: rebase onto trunk if the bookmark
-    // is still present after step 4/5.
+    // 7. Orphan-restack via `jj rebase` ONLY for bookmarks whose
+    // tracked parent disappeared during step 4 (`gt sync` deleted
+    // it because its PR landed). The naive "rebase every remaining
+    // bookmark" approach we used to do here rebases unrelated
+    // bookmarks (any time they happened to live on a non-trunk
+    // commit) and is the source of the bug where `jj-gt fetch`
+    // would surprise-rebase an in-flight unrelated stack entry and
+    // sometimes introduce conflicts.
+    //
+    // The orphan signal is: bookmark existed in `bookmarks_before_sync`
+    // with parent X, X no longer exists locally after sync+import.
     if !opts.no_rebase && !opts.dry_run {
-        // After gt sync + jj import some of `normal` may no longer
-        // exist as local bookmarks. Re-query and rebase any whose
-        // current parent commit isn't on trunk's ancestry.
         let remaining = list_local_bookmarks(jj)?;
-        for local in &remaining {
-            let revset = local.name.clone();
-            // Best-effort. If it errors (already on trunk, conflict),
-            // log and continue — the user can `jj rebase` manually.
-            let _ = jj::rebase(jj, &revset, &opts.trunk);
+        let remaining_names: std::collections::BTreeSet<String> =
+            remaining.iter().map(|b| b.name.clone()).collect();
+        let before_names: std::collections::BTreeSet<String> = bookmarks_before_sync
+            .iter()
+            .map(|b| b.name.clone())
+            .collect();
+        let deleted_during_sync: std::collections::BTreeSet<String> =
+            before_names.difference(&remaining_names).cloned().collect();
+
+        for sb in &pre_sync_stacked {
+            let Some(prev_parent) = plan_orphan_rebase(sb, &remaining_names, &deleted_during_sync)
+            else {
+                continue;
+            };
+            // Confirmed orphan: rebase onto trunk.
+            let local = remaining
+                .iter()
+                .find(|b| b.name == sb.name)
+                .cloned()
+                .expect("filtered by remaining_names above");
+
+            // Look up the deleted parent's pre-sync commit id so we
+            // can use it as the lower bound of the rebase revset.
+            // The parent's bookmark is gone, but the commit object
+            // sticks around until jj's GC runs.
+            let parent_commit = bookmarks_before_sync
+                .iter()
+                .find(|b| b.name == prev_parent)
+                .map(|b| b.commit_id.clone());
+
+            let rebase_revset = match parent_commit.as_deref() {
+                Some(commit) => build_orphan_rebase_revset(commit, &sb.name),
+                None => {
+                    // Defensive fallback. We snapshotted
+                    // bookmarks_before_sync from list_local_bookmarks
+                    // ourselves so a miss here would mean the parent
+                    // bookmark exists in the stack graph but not in
+                    // the bookmark list — shouldn't happen, but if
+                    // it does, fall back to the bookmark-only revset
+                    // and accept that multi-commit stacks may only
+                    // move their tip.
+                    sb.name.clone()
+                }
+            };
+
+            match jj::rebase(jj, &rebase_revset, &opts.trunk) {
+                Ok(jj::RebaseOutcome::Clean) | Ok(jj::RebaseOutcome::NoOp) => {
+                    actions.push((
+                        local,
+                        CleanupAction::Rebased {
+                            onto: opts.trunk.clone(),
+                            prev_parent,
+                        },
+                    ));
+                }
+                Ok(jj::RebaseOutcome::Conflicted { message }) => {
+                    actions.push((
+                        local,
+                        CleanupAction::RebaseConflicted {
+                            onto: opts.trunk.clone(),
+                            prev_parent,
+                            message,
+                        },
+                    ));
+                }
+                Err(e) => {
+                    // Hard rebase failure (e.g. immutable commit) —
+                    // surface as a conflicted action so it's at
+                    // least visible in the output rather than silently
+                    // swallowed.
+                    actions.push((
+                        local,
+                        CleanupAction::RebaseConflicted {
+                            onto: opts.trunk.clone(),
+                            prev_parent,
+                            message: format!("jj rebase failed: {e}"),
+                        },
+                    ));
+                }
+            }
         }
     }
 
     Ok(actions)
+}
+
+/// Plan a single orphan rebase: returns `Some((bookmark, parent))`
+/// when `sb` is a confirmed orphan (its parent disappeared from the
+/// local bookmark set during gt sync) AND the bookmark itself still
+/// exists locally. Pure function; no jj/gt calls.
+///
+/// Returns None when:
+/// - the bookmark itself was deleted (nothing to rebase),
+/// - the bookmark's parent is trunk (already on trunk's ancestry),
+/// - the parent still exists locally (the stack edge is intact).
+pub fn plan_orphan_rebase(
+    sb: &StackedBookmark,
+    remaining_names: &std::collections::BTreeSet<String>,
+    deleted_during_sync: &std::collections::BTreeSet<String>,
+) -> Option<String> {
+    if !remaining_names.contains(&sb.name) {
+        return None;
+    }
+    match &sb.parent {
+        BookmarkOrTrunk::Trunk => None,
+        BookmarkOrTrunk::Bookmark(parent) => {
+            if deleted_during_sync.contains(parent) {
+                Some(parent.clone())
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Build the `jj rebase -s` revset that captures the *entire* range
+/// of commits from above the orphan's deleted parent up through the
+/// bookmark tip. Crucial for multi-commit-per-bookmark stacks: the
+/// naive `jj rebase -s <bookmark> -d trunk` only moves the tip
+/// commit (since the bookmark name resolves to one commit), leaving
+/// any unbookmarked parent commits stranded — which then surfaces
+/// as a "file appeared from nowhere" rebase conflict when those
+/// stranded parents are the ones that created the file.
+///
+/// `roots(<parent_commit>..<bookmark>)` reads as: "find the
+/// lowest-level commits in the half-open range (parent_commit,
+/// bookmark]." Concretely, that's the first commit above the
+/// deleted parent. `jj rebase -s <root>` then includes that root
+/// plus every descendant up to and including the bookmark — moving
+/// the whole stack-entry as one unit.
+///
+/// We deliberately use the commit id (not the bookmark name) for
+/// the lower bound because the parent's bookmark was deleted by
+/// `gt sync` and no longer resolves as a name; the commit object
+/// itself remains addressable until jj's garbage collector runs.
+pub fn build_orphan_rebase_revset(parent_commit_id: &str, bookmark: &str) -> String {
+    format!("roots({parent_commit_id}..{bookmark})")
 }
 
 #[cfg(test)]
@@ -404,5 +560,99 @@ mod tests {
         let prefixes = vec!["gtmq_".to_owned(), "graphite-".to_owned()];
         assert!(is_gtmq_branch("graphite-tmp-1", &prefixes));
         assert!(!is_gtmq_branch("other", &prefixes));
+    }
+
+    fn sb(name: &str, parent: BookmarkOrTrunk) -> StackedBookmark {
+        StackedBookmark {
+            name: name.into(),
+            parent,
+        }
+    }
+
+    fn names(items: &[&str]) -> std::collections::BTreeSet<String> {
+        items.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn plan_orphan_rebase_skips_when_bookmark_was_deleted() {
+        // The bookmark itself disappeared (its own PR landed and gt
+        // sync removed it) — nothing to rebase.
+        let s = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
+        let remaining = names(&["top"]);
+        let deleted = names(&["bottom", "mid"]);
+        assert_eq!(plan_orphan_rebase(&s, &remaining, &deleted), None);
+    }
+
+    #[test]
+    fn plan_orphan_rebase_skips_when_parent_is_trunk() {
+        // Bottom of a stack — parent is trunk, already on trunk's
+        // ancestry; rebasing onto trunk would be a no-op.
+        let s = sb("bottom", BookmarkOrTrunk::Trunk);
+        let remaining = names(&["bottom"]);
+        let deleted = names(&[]);
+        assert_eq!(plan_orphan_rebase(&s, &remaining, &deleted), None);
+    }
+
+    #[test]
+    fn plan_orphan_rebase_skips_when_parent_still_exists() {
+        // The stack edge is intact — bottom→mid→top, gt sync didn't
+        // delete bottom, so mid isn't orphaned.
+        let s = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
+        let remaining = names(&["bottom", "mid", "top"]);
+        let deleted = names(&[]);
+        assert_eq!(plan_orphan_rebase(&s, &remaining, &deleted), None);
+    }
+
+    #[test]
+    fn plan_orphan_rebase_fires_when_parent_was_deleted() {
+        // bottom's PR landed → gt sync removed bottom → mid is
+        // orphaned and needs rebasing onto trunk.
+        let s = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
+        let remaining = names(&["mid", "top"]);
+        let deleted = names(&["bottom"]);
+        assert_eq!(
+            plan_orphan_rebase(&s, &remaining, &deleted),
+            Some("bottom".into())
+        );
+    }
+
+    #[test]
+    fn plan_orphan_rebase_skips_unrelated_bookmark() {
+        // Regression test for the bug we observed in the wild:
+        // `sea-501` was unrelated to the bookmark that triggered the
+        // fetch (`sea-589`), wasn't a child of anything that got
+        // deleted, but the old code rebased it anyway and introduced
+        // a conflict. plan_orphan_rebase should return None for it.
+        let s = sb(
+            "sea-501-sccache-supervisor--thor",
+            BookmarkOrTrunk::Bookmark("main".into()),
+        );
+        let remaining = names(&[
+            "main",
+            "sea-501-sccache-supervisor--thor",
+            "sea-589-grant-self-test--iris",
+        ]);
+        let deleted = names(&[]);
+        assert_eq!(plan_orphan_rebase(&s, &remaining, &deleted), None);
+    }
+
+    #[test]
+    fn build_orphan_rebase_revset_uses_roots_of_half_open_range() {
+        // The revset must include the bookmark name in its tip slot
+        // and the parent commit id in its lower-bound slot, wrapped
+        // by `roots(...)` so `jj rebase -s` picks up the lowest
+        // commit above the deleted parent.
+        let revset = build_orphan_rebase_revset("abc123def456", "sea-501--thor");
+        assert_eq!(revset, "roots(abc123def456..sea-501--thor)");
+    }
+
+    #[test]
+    fn build_orphan_rebase_revset_with_full_40_char_oid() {
+        // gh and git both produce 40-char OIDs; the revset shouldn't
+        // care about length but the test pins that no truncation
+        // happens.
+        let full_oid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let revset = build_orphan_rebase_revset(full_oid, "upper");
+        assert_eq!(revset, format!("roots({full_oid}..upper)"));
     }
 }

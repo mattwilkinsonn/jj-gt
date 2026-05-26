@@ -161,14 +161,22 @@ pub fn read_repo_config_trunk(workspace_root: &Path) -> Result<Option<String>> {
 
 fn run_gt(workspace_root: &Path, argv: &[&str]) -> Result<()> {
     tracing::info!("running: gt {:?}", argv);
-    let status = Command::new("gt")
-        .args(argv)
-        .current_dir(workspace_root)
-        .status()
-        .map_err(|e| JjGtError::GtFailed {
-            status: -1,
-            stderr: format!("failed to spawn gt: {e}"),
-        })?;
+    let mut cmd = Command::new("gt");
+    cmd.args(argv).current_dir(workspace_root);
+    // Tests-only escape hatch: when JJ_GT_TEST_XDG_CONFIG_HOME is
+    // set, propagate it to gt as XDG_CONFIG_HOME so parallel
+    // integration tests each get their own user_config and don't
+    // race on the shared ~/.config/graphite/user_config file (gt
+    // rewrites it on every invocation; concurrent writes have been
+    // observed to truncate it mid-write). Production code never
+    // sets this variable.
+    if let Ok(xdg) = std::env::var("JJ_GT_TEST_XDG_CONFIG_HOME") {
+        cmd.env("XDG_CONFIG_HOME", xdg);
+    }
+    let status = cmd.status().map_err(|e| JjGtError::GtFailed {
+        status: -1,
+        stderr: format!("failed to spawn gt: {e}"),
+    })?;
     if !status.success() {
         return Err(JjGtError::GtFailed {
             status: status.code().unwrap_or(-1),

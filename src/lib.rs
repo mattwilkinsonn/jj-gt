@@ -307,10 +307,53 @@ fn fetch_cmd(
 
     let actions = cleanup::run_fetch(jj, &workspace_root, &opts)?;
     for (bookmark, action) in &actions {
-        println!("  {} → {:?}", bookmark.name, action);
+        println!("  {} → {}", bookmark.name, format_action(action));
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// Render a [`cleanup::CleanupAction`] as a one-line human string.
+/// Kept here (not in cleanup.rs) so the data type stays free of
+/// presentation concerns — `Debug` is still available for tests.
+fn format_action(action: &cleanup::CleanupAction) -> String {
+    use cleanup::CleanupAction;
+    match action {
+        CleanupAction::GtSyncDeleted => "deleted by gt sync".into(),
+        CleanupAction::GtmqPruned { had_pr: Some(n) } => {
+            format!("gtmq pruned (PR #{n} closed)")
+        }
+        CleanupAction::GtmqPruned { had_pr: None } => "gtmq pruned (no PR)".into(),
+        CleanupAction::GtmqLeftAlone { pr } => format!("gtmq left alone (PR #{pr} open)"),
+        CleanupAction::OrphanDeleted {
+            pr,
+            merge_commit_id,
+        } => format!(
+            "orphan deleted (PR #{pr} merged as {})",
+            &merge_commit_id[..merge_commit_id.len().min(12)]
+        ),
+        CleanupAction::OrphanSkipped { pr, .. } => format!("orphan skipped (PR #{pr})"),
+        CleanupAction::SkippedDueToDrift {
+            pr,
+            local_sha,
+            pushed_sha,
+        } => format!(
+            "drift detected — skipped (PR #{pr}, local {}, pushed {})",
+            &local_sha[..local_sha.len().min(12)],
+            &pushed_sha[..pushed_sha.len().min(12)],
+        ),
+        CleanupAction::Rebased { onto, prev_parent } => {
+            format!("rebased onto {onto} (parent `{prev_parent}` was removed by gt sync)")
+        }
+        CleanupAction::RebaseConflicted {
+            onto,
+            prev_parent,
+            message,
+        } => format!(
+            "⚠ rebase onto {onto} produced conflicts (parent `{prev_parent}` was removed by gt sync) — {message}; run `jj resolve` to fix"
+        ),
+        CleanupAction::LeftAlone => "left alone".into(),
+    }
 }
 
 fn status_cmd(
