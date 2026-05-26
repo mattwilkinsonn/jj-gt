@@ -1,4 +1,17 @@
-# jj-gt
+# jj-gt (archived)
+
+> [!IMPORTANT]
+> **This repo has been archived.** Development continues in the
+> [zireael](https://github.com/mattwilkinsonn/zireael) monorepo at
+> [`tools/jj-gt/`](https://github.com/mattwilkinsonn/zireael/tree/main/tools/jj-gt).
+>
+> - **Install:** `brew install mattwilkinsonn/zireael/jj-gt` (or
+>   `cargo install jj-gt` — the crate stays on crates.io).
+> - **Issues / PRs:** open them against
+>   [mattwilkinsonn/zireael](https://github.com/mattwilkinsonn/zireael/issues) with
+>   `jj-gt` in the title.
+
+---
 
 Bridge [jj](https://jj-vcs.github.io) bookmark stacks and
 [Graphite](https://graphite.dev/) (`gt`) PR stacks in one command.
