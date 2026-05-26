@@ -127,6 +127,42 @@ pub fn current_change_id(jj: &JjCli) -> Result<String> {
     Ok(out.trim().to_owned())
 }
 
+/// `jj log -r <revset> --no-graph -T commit_id --limit 1`.
+///
+/// Cheap point query for resolving a revset (e.g. a bookmark name or
+/// trunk name) down to its full commit id. Used by the submit
+/// pipeline to build a real BookmarkUpdate for `jj_hooks` instead
+/// of relying on the revset-string synthesis layer in
+/// `run_for_revset_outcome`.
+///
+/// Errors when the revset resolves to zero commits — callers
+/// generally want a hard failure in that case rather than an empty
+/// Option to thread through, because they're already certain the
+/// bookmark / trunk exists by the time they ask.
+pub fn resolve_commit_id(jj: &JjCli, revset: &str) -> Result<String> {
+    let out = jj_run(
+        jj,
+        &[
+            "log",
+            "-r",
+            revset,
+            "--no-graph",
+            "-T",
+            "commit_id",
+            "--limit",
+            "1",
+            "--ignore-working-copy",
+        ],
+    )?;
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        return Err(JjGtError::Invalid(format!(
+            "revset `{revset}` resolved to no commits"
+        )));
+    }
+    Ok(trimmed.to_owned())
+}
+
 /// `jj edit <change_id>`. Restores `@` to a previously-recorded
 /// change id.
 pub fn edit_change(jj: &JjCli, change_id: &str) -> Result<()> {
@@ -134,7 +170,7 @@ pub fn edit_change(jj: &JjCli, change_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// `jj bookmark track <name>@<remote>` (idempotent — succeeds if
+/// `jj bookmark track <name> --remote <remote>` (idempotent — succeeds if
 /// already tracked).
 ///
 /// Why jj-gt has to do this: when gt pushes a bookmark via raw
@@ -164,6 +200,39 @@ pub fn track_bookmark_on_remote(jj: &JjCli, bookmark: &str, remote: &str) -> Res
         ],
     )?;
     Ok(())
+}
+
+/// `jj bookmark list --tracked --remote <remote> -T 'name ++ "\n"'`.
+///
+/// Returns the set of bookmark names that are already tracked on
+/// `remote`. Used by the post-submit pipeline to skip re-tracking
+/// (jj warns "Remote bookmark already tracked" for every redundant
+/// call, which clutters submit output without doing any work).
+///
+/// `--ignore-working-copy` matches the rest of this module — keeps
+/// the call cheap and doesn't snapshot the working tree.
+pub fn list_tracked_bookmarks_on_remote(
+    jj: &JjCli,
+    remote: &str,
+) -> Result<std::collections::BTreeSet<String>> {
+    let out = jj_run(
+        jj,
+        &[
+            "bookmark",
+            "list",
+            "--tracked",
+            "--remote",
+            remote,
+            "-T",
+            r#"name ++ "\n""#,
+            "--ignore-working-copy",
+        ],
+    )?;
+    Ok(out
+        .lines()
+        .map(|l| l.trim().to_owned())
+        .filter(|l| !l.is_empty())
+        .collect())
 }
 
 /// Outcome of a `jj rebase` invocation that exits 0 — broken out

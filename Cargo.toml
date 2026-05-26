@@ -40,9 +40,11 @@ anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive", "env"] }
 clap_complete = { version = "4.6.5", features = ["unstable-dynamic"] }
 # Hooks runner shared with jj-hp. Published on crates.io as `jj-hooks`.
-# 0.2.0 lifted `run_for_revset` + `run_for_revset_outcome` to the public
-# library surface — required by jj-gt's hooks.rs wrapper.
-jj_hooks = { package = "jj-hooks", version = "0.2.0" }
+# 0.2.1 fixed the multi-commit-revset bug in `run_for_revset_outcome`
+# (was checking only the tip's 1-commit parent→tip slice instead of
+# the full `roots(revset)-..heads(revset)` range); required by
+# jj-gt's stack-submit hook gate.
+jj_hooks = { package = "jj-hooks", version = "0.2.1" }
 regex = "1.12.3"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.145"
@@ -58,3 +60,10 @@ tempfile = "3.27.0"
 [profile.release]
 lto = "thin"
 strip = "symbols"
+
+# TEMPORARY: until `jj-hooks 0.2.1` is published to crates.io, point
+# the dep at the sibling working tree so the multi-commit-revset
+# fix is exercised end-to-end. Remove this block once 0.2.1 is on
+# the registry.
+[patch.crates-io]
+jj-hooks = { path = "../jj-hooks" }

@@ -152,12 +152,25 @@ fn submit_cmd(
         jj::git_export(jj)?;
     }
 
-    // 5. Hook gate against trunk..tip.
+    // 5. Hook gate against the full trunk..tip range. Resolve both
+    // ends to commit ids ourselves so we can hand `jj_hooks` a
+    // proper BookmarkUpdate (skipping the synthesis layer that was
+    // historically a bug magnet for multi-commit revsets).
     if !no_hooks {
+        let trunk_commit = jj::resolve_commit_id(jj, &trunk)?;
+        let tip_commit = jj::resolve_commit_id(jj, &tip)?;
         let opts = hooks::HookOpts {
             runner_override: hk_runner.map(Into::into),
         };
-        hooks::run_pre_push(jj, &workspace_root, &trunk, &tip, &opts)?;
+        hooks::run_pre_push(
+            jj,
+            &workspace_root,
+            &bookmarks.remote,
+            &tip,
+            &trunk_commit,
+            &tip_commit,
+            &opts,
+        )?;
     }
 
     // 6. gt track per (bookmark, parent). Must be bottom→top because
@@ -196,8 +209,18 @@ fn submit_cmd(
     // next jj operation imports the new `refs/remotes/<remote>/*`
     // refs as untracked → ancestors flip immutable → users can't
     // amend their just-pushed commits.
+    //
+    // Skip bookmarks that are already tracked — jj emits a noisy
+    // `Warning: Remote bookmark already tracked` for every redundant
+    // call, and on a typical re-submit (updating an existing PR)
+    // every bookmark is already tracked.
     if !submit.dry_run {
+        let already_tracked =
+            jj::list_tracked_bookmarks_on_remote(jj, &bookmarks.remote).unwrap_or_default();
         for sb in &stacked_sorted {
+            if already_tracked.contains(&sb.name) {
+                continue;
+            }
             if let Err(e) = jj::track_bookmark_on_remote(jj, &sb.name, &bookmarks.remote) {
                 // Tracking is best-effort: even if a single bookmark
                 // fails (e.g. some race with a concurrent fetch), the
@@ -211,15 +234,21 @@ fn submit_cmd(
         }
     }
 
-    // 10. Restore @.
-    if let Some(change) = saved_change_id
+    // 10. Restore @, but only if it actually moved. The restore
+    // exists because gt's git-push triggers a jj ref-import that
+    // sometimes shifts @ off its original commit; on a typical
+    // re-submit (no new bookmarks created) the import is a no-op
+    // and @ stays put, so running `jj edit` would just print
+    // `Nothing changed.` + `Already editing that commit` — pure
+    // noise.
+    if let Some(saved) = saved_change_id
         && !submit.dry_run
     {
-        // Best-effort: if @ no longer maps to something checkout-
-        // able (rare — gt's import shouldn't abandon the change),
-        // log and continue.
-        if let Err(e) = jj::edit_change(jj, &change) {
-            eprintln!("jj-gt: could not restore @ to {change}: {e}");
+        let current = jj::current_change_id(jj).ok();
+        if current.as_deref() != Some(saved.as_str())
+            && let Err(e) = jj::edit_change(jj, &saved)
+        {
+            eprintln!("jj-gt: could not restore @ to {saved}: {e}");
         }
     }
 

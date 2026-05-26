@@ -296,9 +296,7 @@ dependencies = [
 
 [[package]]
 name = "jj-hooks"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d14899f005e8e7183e9b796eb23d59d294a1fc90bbdc0a74bb4b8af69a7dcf2"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",

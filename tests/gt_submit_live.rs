@@ -218,10 +218,29 @@ fn submit_creates_real_pr_stack_and_marks_them_ready() {
 
     // 5b. Replicate jj-gt's post-submit bookmark-track pass so the
     // immutable-commits assertion below has the same starting
-    // state the real `jj-gt submit` would leave.
+    // state the real `jj-gt submit` would leave. Mirror production
+    // code's skip-if-already-tracked so we exercise both branches.
+    let already_tracked =
+        jj_gt::jj::list_tracked_bookmarks_on_remote(&jj_cli, "origin").unwrap_or_default();
     for sb in &sorted {
+        if already_tracked.contains(&sb.name) {
+            continue;
+        }
         jj_gt::jj::track_bookmark_on_remote(&jj_cli, &sb.name, "origin")
             .expect("post-submit bookmark track should succeed");
+    }
+
+    // Sanity-check the tracking call actually achieved its goal —
+    // re-query and assert both bookmarks now appear in the tracked
+    // set. (Catches a future regression where the tracking call
+    // silently no-ops.)
+    let now_tracked =
+        jj_gt::jj::list_tracked_bookmarks_on_remote(&jj_cli, "origin").unwrap_or_default();
+    for name in [&bottom, &top] {
+        assert!(
+            now_tracked.contains(name),
+            "expected `{name}` in tracked set after post-submit track; got {now_tracked:?}",
+        );
     }
 
     // 6. Assert the PRs landed on github.

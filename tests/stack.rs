@@ -188,6 +188,41 @@ fn current_change_id_round_trips() {
 }
 
 #[test]
+fn resolve_commit_id_returns_full_oid_for_bookmark() {
+    // The submit hook gate uses resolve_commit_id to build a real
+    // BookmarkUpdate for jj_hooks (instead of going through the
+    // synthesis layer that was historically buggy). This test pins
+    // that the helper returns a non-empty 40-char hex commit id for
+    // a bookmark name and for `@`.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_linear_stack_fixture();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    for revset in ["main", "bottom", "mid", "top", "@"] {
+        let oid = jj_gt::jj::resolve_commit_id(&jj_cli, revset)
+            .unwrap_or_else(|e| panic!("resolve `{revset}`: {e}"));
+        assert_eq!(
+            oid.len(),
+            40,
+            "expected 40-char commit id for `{revset}`, got `{oid}`",
+        );
+        assert!(
+            oid.chars().all(|c| c.is_ascii_hexdigit()),
+            "expected hex commit id for `{revset}`, got `{oid}`",
+        );
+    }
+
+    // Empty-revset error path: a revset that resolves to no commits
+    // surfaces as a clear error, not a panic or an empty string.
+    let err =
+        jj_gt::jj::resolve_commit_id(&jj_cli, "description(\"definitely-not-a-real-commit\")");
+    assert!(err.is_err(), "expected error for empty revset, got {err:?}");
+}
+
+#[test]
 fn list_local_bookmarks_returns_name_and_short_commit_id() {
     // Regression test: jj 0.40+ rejected our previous template
     // `name ++ " " ++ commit_id.short(12) ++ "\n"` because the
@@ -341,5 +376,77 @@ fn orphan_rebase_moves_full_multi_commit_range() {
     assert!(
         !lines.iter().any(|l| l.contains("bottom commit")),
         "bottom commits shouldn't be in upper's post-rebase ancestry: {ancestry}",
+    );
+}
+
+#[test]
+fn list_tracked_bookmarks_round_trips() {
+    // Regression test for the "Warning: Remote bookmark already
+    // tracked" spam: jj-gt's submit path uses this query to skip
+    // redundant `jj bookmark track` calls when re-submitting a
+    // stack where every bookmark is already tracked.
+    //
+    // No network — uses the linear-stack fixture, which has no
+    // remote, so the tracked set should be empty. Once a remote
+    // ref is added and tracked, the same call should return it.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_linear_stack_fixture();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    // Fresh fixture, no remote → tracked set is empty.
+    let tracked = jj_gt::jj::list_tracked_bookmarks_on_remote(&jj_cli, "origin").unwrap();
+    assert!(
+        tracked.is_empty(),
+        "no remote → tracked set should be empty, got {tracked:?}",
+    );
+
+    // Manually create a colocated git remote + a remote ref so we
+    // can exercise the tracked-set populated path.
+    let remote_dir = tempfile::tempdir().unwrap();
+    let remote_path = remote_dir.path();
+    let bare = std::process::Command::new("git")
+        .args(["init", "--bare", "-q"])
+        .current_dir(remote_path)
+        .output()
+        .unwrap();
+    assert!(bare.status.success());
+    let add_remote = std::process::Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            &format!("file://{}", remote_path.display()),
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        add_remote.status.success(),
+        "git remote add failed: {}",
+        String::from_utf8_lossy(&add_remote.stderr)
+    );
+
+    // Push `top` to the bare remote so origin gets a real ref;
+    // then explicitly track it via the wrapper under test.
+    let push = std::process::Command::new("git")
+        .args(["push", "origin", "top"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        push.status.success(),
+        "git push failed: {}",
+        String::from_utf8_lossy(&push.stderr)
+    );
+    jj(tmp.path(), &["git", "import"]);
+    jj_gt::jj::track_bookmark_on_remote(&jj_cli, "top", "origin").unwrap();
+
+    let tracked = jj_gt::jj::list_tracked_bookmarks_on_remote(&jj_cli, "origin").unwrap();
+    assert!(
+        tracked.contains("top"),
+        "expected `top` in tracked set, got {tracked:?}",
     );
 }

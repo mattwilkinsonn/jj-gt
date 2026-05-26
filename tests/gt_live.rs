@@ -74,15 +74,15 @@ fn gt_cli(cwd: &Path, args: &[&str]) {
     );
 }
 
-fn git_capture(cwd: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+fn gt_capture(cwd: &Path, args: &[&str]) -> String {
+    let out = Command::new("gt")
         .args(args)
         .current_dir(cwd)
         .output()
         .unwrap();
     assert!(
         out.status.success(),
-        "git {args:?} failed: {}\n{}",
+        "gt {args:?} failed: {}\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
@@ -131,49 +131,78 @@ fn gt_init(tmp: &Path) {
     gt_cli(tmp, &["init", "--trunk", "main", "--no-interactive"]);
 }
 
-/// Read the parentBranchName field from
-/// `refs/branch-metadata/<branch>`. Returns None if the ref doesn't
-/// exist; panics on a malformed blob (since that signals gt itself
-/// changed shape and we want to catch it loudly).
+/// Ask gt itself which branch is the parent of `branch`. Works
+/// uniformly across gt's storage-backend evolution:
 ///
-/// Uses `git for-each-ref` rather than `git rev-parse --verify` so
-/// we work uniformly across git backends (loose refs, packed-refs,
-/// reftable) and across macOS / Linux git builds — a previous
-/// `--verify --quiet` probe returned exit 1 on macOS even when the
-/// ref existed (cause not fully understood; for-each-ref sidesteps
-/// it). On the failure path we dump the full set of branch-metadata
-/// refs so a future debugger isn't guessing.
+/// - gt ≤ 1.7.x stores stack metadata as
+///   `refs/branch-metadata/<branch>` git refs pointing at JSON
+///   blobs.
+/// - gt 1.8+ migrated to a SQLite database under
+///   `$XDG_CONFIG_HOME/graphite/` — the git refs disappear
+///   entirely.
+///
+/// Either way, `gt log short --no-interactive` renders the stack
+/// tree in topological order (top → bottom), one bookmark per
+/// line, formatted like:
+///
+/// ```text
+/// ◯  top
+/// ◯  mid
+/// ◯  bottom
+/// ◯  main
+/// ```
+///
+/// The parent of `<branch>` is the next non-empty bookmark line
+/// after `<branch>` — for a linear stack this is always the line
+/// immediately below. We deliberately don't try to parse the
+/// graph-glyph column (which encodes branching in non-linear
+/// stacks) because every test fixture in this file builds a
+/// linear stack on purpose.
+///
+/// Returns None when `<branch>` isn't in gt's tracked set or when
+/// it sits at the bottom of the output (i.e. has no parent line
+/// below it).
 fn parent_in_metadata(workspace_root: &Path, branch: &str) -> Option<String> {
-    let listing = git_capture(
-        workspace_root,
-        &[
-            "for-each-ref",
-            "--format=%(refname) %(objectname)",
-            "refs/branch-metadata/",
-        ],
-    );
-    let target_ref = format!("refs/branch-metadata/{branch}");
-    let oid = listing
+    let listing = gt_capture(workspace_root, &["log", "short", "--no-interactive"]);
+    let names: Vec<&str> = listing
         .lines()
-        .find_map(|line| {
-            let mut parts = line.split_whitespace();
-            let name = parts.next()?;
-            let oid = parts.next()?;
-            (name == target_ref).then(|| oid.to_owned())
-        })
-        .or_else(|| {
-            eprintln!("parent_in_metadata: no ref `{target_ref}`; full listing:\n{listing}");
-            None
-        })?;
-    let blob = git_capture(workspace_root, &["cat-file", "-p", &oid]);
-    // Tiny JSON probe — avoid pulling serde_json into the test deps;
-    // the field shape is stable enough to substring-match for the
-    // smoke. Format: `"parentBranchName": "<name>"`.
-    let key = r#""parentBranchName": ""#;
-    let start = blob.find(key)? + key.len();
-    let rest = &blob[start..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_owned())
+        .filter_map(parse_gt_log_short_line)
+        .collect();
+    let idx = names.iter().position(|n| *n == branch).or_else(|| {
+        eprintln!(
+            "parent_in_metadata: branch `{branch}` not found in `gt log short` output:\n{listing}"
+        );
+        None
+    })?;
+    names.get(idx + 1).map(|s| (*s).to_owned()).or_else(|| {
+        eprintln!(
+            "parent_in_metadata: branch `{branch}` has no parent line below it; full output:\n{listing}"
+        );
+        None
+    })
+}
+
+/// Parse a single `gt log short` line to its bookmark name. gt
+/// prefixes each tracked branch with a one-character graph glyph
+/// (`◯`, `◉`, `●`, `*`, etc. depending on gt version + whether
+/// the branch is the current one) followed by whitespace; the
+/// remainder is the bookmark name plus optional annotation in
+/// parens. We split on whitespace and take the second token, then
+/// strip any trailing parenthesized annotation.
+///
+/// Returns None for blank lines or for lines we can't parse — the
+/// caller will just skip them.
+fn parse_gt_log_short_line(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // The graph glyph is always the first non-whitespace token.
+    // Some gt versions use ASCII (`*`), others use unicode (`◯`).
+    // After the glyph + whitespace, the next token is the branch
+    // name. Annotations like `(needs restack)` may follow.
+    let after_glyph = trimmed.split_whitespace().nth(1)?;
+    Some(after_glyph)
 }
 
 #[test]
