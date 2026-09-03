@@ -1,1 +1,25 @@
-target/
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Bun / Node (scripts/setup-live-test-fixture)
+node_modules/
+.bun/
+dist/
+*.log
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# devenv + direnv
+.devenv*
+.direnv/
+devenv.local.nix

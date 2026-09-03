@@ -1,0 +1,29 @@
+# devenv inputs. Rolling nixpkgs is devenv's recommended channel. rust-overlay builds the
+# exact rust-toolchain.toml Rust pin (pure-eval, no hash file), REDECLARED here per the
+# dev-shared transitivity verdict (module inputs do NOT compose transitively). hk (the
+# pre-push hook runner) isn't packaged in nixpkgs — it ships from its own flake.
+#
+# nixpkgs-jj042 pins jujutsu to 0.42.0: jj-gt's stack-reconciliation logic targets jj 0.42
+# semantics (jj 0.44's `jj git fetch` eagerly auto-rebases children onto rewritten parents,
+# which breaks the orphan re-anchor path). An overlay (devenv.nix) shadows the rolling
+# jujutsu that the dev-shared module would otherwise pull. Pinned to the monorepo's rev.
+inputs:
+  nixpkgs:
+    url: github:cachix/devenv-nixpkgs/rolling
+  rust-overlay:
+    url: github:oxalica/rust-overlay
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  dev-shared:
+    url: github:mattwilkinsonn/dev-shared
+    flake: false
+  hk:
+    url: github:jdx/hk/v1.48.0
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  nixpkgs-jj042:
+    url: github:cachix/devenv-nixpkgs/12866ae2dddbc0ab8b329915f8072bb9c75bde89
+imports:
+  - dev-shared

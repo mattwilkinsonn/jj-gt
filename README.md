@@ -1,17 +1,4 @@
-# jj-gt (archived)
-
-> [!IMPORTANT]
-> **This repo has been archived.** Development continues in the
-> [zireael](https://github.com/mattwilkinsonn/zireael) monorepo at
-> [`tools/jj-gt/`](https://github.com/mattwilkinsonn/zireael/tree/main/tools/jj-gt).
->
-> - **Install:** `brew install mattwilkinsonn/zireael/jj-gt` (or
->   `cargo install jj-gt` — the crate stays on crates.io).
-> - **Issues / PRs:** open them against
->   [mattwilkinsonn/zireael](https://github.com/mattwilkinsonn/zireael/issues) with
->   `jj-gt` in the title.
-
----
+# jj-gt
 
 Bridge [jj](https://jj-vcs.github.io) bookmark stacks and
 [Graphite](https://graphite.dev/) (`gt`) PR stacks in one command.
@@ -48,6 +35,51 @@ workflows:
 - **Composes `gt sync` + `jj rebase` + local cleanup** (`jj-gt fetch`).
 - **Queries `gh` for stack-wide PR state** (`jj-gt status`).
 
+**The submit promise.** `jj-gt submit`'s goal is *"make Graphite's
+state match what you currently have locally in jj, every time."* That
+means a few opinionated defaults you might want to opt out of:
+
+- `gt submit --always` is on by default — gt re-pushes every PR's
+  base ref even when it thinks nothing changed. The opt-out is
+  `--no-always`. Without this, gt's skip-unchanged heuristic can
+  leave a PR's base on a stale `graphite-base/N` marker from a
+  previous interrupted submit; the next `jj-gt submit` then no-ops
+  and the PR shows as "conflicting" on GitHub even though the
+  local stack is correct.
+- `gt submit --publish` is on by default. Opt-out via `--no-publish`
+  for keeping PRs in draft (or use `--draft` to create as draft).
+- Pre-push hooks run per-bookmark in parallel by default. Opt out
+  with `--hooks-sequential` (one bookmark at a time) or
+  `--hooks-tip-only` (only run hooks for the tip).
+- **Issue-reference hoisting is on by default.** After `gt submit`,
+  jj-gt scans each bookmark's commit range for magic-word references
+  (`Closes SEA-1`, `Fixes #42`, `Refs DES-9`, …) and reconciles them
+  into a machine-managed, HTML-comment-fenced block at the end of the
+  PR description — one normalized `Closes`/`Refs` line per issue,
+  closing intent winning when any commit closed it. This matters
+  because a Graphite squash-merge sets the merge-commit body to the
+  PR title + description, and `--ai` is non-deterministic about
+  keeping references; without the hoist, issues strand un-linked on
+  merge. The block is regenerated every submit (a review-cycle commit
+  that adds a reference gets picked up automatically) and is
+  idempotent. `Co-Authored-By:` trailers are hoisted the same way
+  (deduped by identity, one per distinct co-author, rendered last so
+  the squash body's trailing lines are valid GitHub trailers) — so
+  `seal` and any human pair show up as contributors on the squash
+  commit, which a Graphite squash-merge would otherwise drop. Opt out
+  with `--no-links`.
+- Both `jj-gt submit` and `jj-gt fetch` auto-shelter any pending
+  working-copy edits via `jj new @` before doing anything. After
+  the shelter, the user's edits are committed against the *old*
+  `@` and the new `@` is a fresh empty change above them — the
+  pipeline operates on the empty `@`, so concurrent jj snapshots
+  (typically from another shell) can't disturb the sheltered
+  edits. There is no opt-out: the previous "refuse to run when
+  edits exist + `--force-with-changes` to bypass" model has been
+  removed; the shelter step is strictly safer and works the same
+  way. The step shows up in the per-step list (`Sheltering
+  uncommitted edits (jj new @)`) so you see what happened.
+
 **IT ISN'T.**
 
 - Not a stack editor. Use jj directly (`jj split`, `jj rebase -s`,
@@ -74,7 +106,8 @@ step.
 ### Via Homebrew tap
 
 ```bash
-brew install mattwilkinsonn/tap/jj-gt
+brew tap mattwilkinsonn/jj-gt https://github.com/mattwilkinsonn/jj-gt
+brew install mattwilkinsonn/jj-gt/jj-gt
 ```
 
 ### From source
@@ -89,9 +122,19 @@ cargo install --path .
 - [`jj`](https://jj-vcs.github.io) on PATH.
 - [`gt`](https://graphite.dev/docs/graphite-cli) on PATH
   (`npm i -g @withgraphite/graphite-cli`).
-- [`gh`](https://cli.github.com) on PATH, authenticated against the
-  remote that hosts your PRs.
+- [`gh`](https://cli.github.com) on PATH, **authenticated** against the
+  remote that hosts your PRs (`gh auth login` if you haven't already
+  — `gh auth status` to verify).
 - The repo must already be tracked by Graphite — run `gt init` once.
+
+**Why gh?** `jj-gt fetch` and `jj-gt status` batch PR-state lookups
+via `gh pr list --search head:<branch>` so they can classify each
+local bookmark (merged / open / closed / drift). Without `gh` auth,
+those calls fail mid-run rather than at startup, so check `gh auth
+status` once before your first `jj-gt fetch` against a private repo.
+(`jj-gt submit` itself delegates the actual push to `gt submit`,
+which has its own GitHub auth path — the `gh` dependency is for
+read-side PR lookups in fetch + status.)
 
 ## Usage
 
@@ -101,7 +144,9 @@ USAGE:
 
 COMMANDS:
     submit      Track + submit selected bookmarks as a stack
-                (drives `gt submit --stack` end-to-end).
+                (drives `gt submit --stack` end-to-end). The full
+                ancestor chain from trunk up to `-b <tip>` is
+                submitted automatically.
     track       Sync refs/branch-metadata/* without submitting
                 (manual escape hatch — same logic as submit minus the
                 gt-submit invocation).
@@ -110,20 +155,65 @@ COMMANDS:
                 branch cleanup, restacks orphaned children with `jj
                 rebase`, prunes `gtmq_*` queue-test artifacts, and
                 falls back to merge-marker scan for PRs gt sync misses.
+    reconcile   Reconcile gt's tracking metadata + (optionally) remote
+                refs with jj's current view of the bookmark graph.
+                Standalone version of the pre-submit reconcile step.
     status      Print stack-wide PR + queue state in stack order.
     log         Print the derived stack as jj-gt sees it (debug).
     init        Print suggested aliases + setup reminders.
     completions Emit a shell completion script.
 ```
 
+### How `jj-gt submit` picks the stack
+
+Submit is always stack-shaped. There's no `--stack` flag because
+there's no other mode — the full ancestor chain from trunk up to
+each `-b <tip>` is included automatically.
+
+```text
+       trunk    bottom    mid    head
+main ───●─────────●────────●──────●
+
+jj-gt submit -b head
+  → walks back to find bottom + mid on the ancestor chain
+  → tracks bookmarks with gt in bottom→top order (gt rejects
+    `gt track <child> --parent <parent>` if the parent isn't
+    tracked yet)
+  → pushes the whole stack via `gt submit --stack`
+```
+
+To submit a subset, name each bookmark with its own `-b` flag —
+`jj-gt submit -b mid -b head` submits just those two, omitting
+`bottom`. Multiple `-b` flags for unrelated tips submit each as
+its own independent stack — `jj-gt submit -b feature-a-tip -b
+feature-b-tip` fans out to two `gt submit --stack` invocations,
+one per stack. Per-bookmark pre-push hooks run in parallel by
+default; use `--hooks-sequential` for serial execution with live
+runner output, or `--hooks-tip-only` to skip the per-bookmark
+gate and run hooks once against the full `trunk..tip` range.
+
 ### Examples
 
 ```bash
-# Submit the whole current stack
-jj-gt submit --all
+# Submit the whole stack ending at `head` (the common case)
+jj-gt submit -b head
 
-# Submit two specific bookmarks as a stack
+# Submit two specific bookmarks as a stack (skips anything above
+# `top--athena` and anything between `bottom--athena` and trunk
+# that isn't in the selection)
 jj-gt submit -b bottom--athena -b top--athena
+
+# Submit two unrelated stacks in one invocation — fans out to one
+# `gt submit --stack` per tip
+jj-gt submit -b feature-a-tip -b feature-b-tip
+
+# Submit every bookmark on the @-ancestor chain (the focused stack)
+jj-gt submit
+
+# Submit every bookmark across every stack in the repo (excludes
+# trunk + gtmq_* queue branches). Useful when you have multiple
+# independent stacks in flight.
+jj-gt submit --all
 
 # Submit as draft PRs, set merge-when-ready
 jj-gt submit --all --draft --merge-when-ready
@@ -152,6 +242,138 @@ jj-gt completions fish | source
 Dynamic completers TAB-expand bookmark and remote names by shelling
 back into `jj-gt` with `COMPLETE=<shell>` set — no jj working-copy
 snapshot per keypress (uses `--ignore-working-copy`).
+
+## jjui integration
+
+`jj-gt init` walks you through a one-time setup that installs seven
+[jjui](https://github.com/idursun/jjui) actions + keybindings so
+the common `jj-gt` flows are reachable from inside the TUI:
+
+| Action | Default key | What it does |
+| --- | --- | --- |
+| `jj-gt-submit-selected` | `x s` | Submit the stack ending at the focused commit (`jj-gt submit -r context.commit_id()` — expands ancestors automatically) |
+| `jj-gt-fetch` | `x f` | Run the Graphite-aware fetch + cleanup pipeline (`jj-gt fetch`) |
+| `jj-gt-track-selected` | `x t` | Sync `refs/branch-metadata/*` for the focused bookmark (`jj-gt track -r context.commit_id()`) |
+| `jj-gt-submit` | `x S` | Submit every bookmark on every stack across the repo (`jj-gt submit --all`) |
+| `jj-gt-track` | `x T` | Sync metadata refs for every bookmark on every stack (`jj-gt track --all`) |
+| `jj-gt-reconcile` | `x r` | Re-track adjacent diverged bookmarks + push rebased SHAs (`jj-gt reconcile`) |
+| `jj-gt-restack` | `x R` | Rebase every local stack onto trunk (`jj-gt restack`) — opt-in cascade for when fetch deferred a conflicting rebase or main has advanced |
+
+Order matters: jjui's `x`-prefix overlay surfaces candidates in the
+order they appear in the config, so the most-frequent actions
+(submit-selected, fetch, track-selected) land at the top of the
+menu and the every-stack/recovery flows further down. Lowercase =
+"the stack at my cursor" (submit/track expand to include every
+bookmark from trunk up through the focused commit). Uppercase =
+"every stack in the repo." Same lowercase/uppercase split jj-hp
+uses for `x p`/`x P`.
+
+The selected variants use `-r context.commit_id()` rather than
+`-b <name>` because jjui's lua context exposes the focused commit's ID
+but not its bookmark name(s). jj-gt's own resolver finds the
+bookmark(s) at that commit; if the commit has zero bookmarks, jj-gt
+errors clearly; if multiple, the multi-stack fan-out submits each
+independently.
+
+If you'd rather hand-edit `~/.config/jjui/config.toml` instead of
+running `jj-gt init`, append:
+
+```toml
+[[actions]]
+name = "jj-gt-submit-selected"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "submit", "-r", context.commit_id())
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-gt-fetch"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "fetch")
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-gt-track-selected"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "track", "-r", context.commit_id())
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-gt-submit"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "submit", "--all")
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-gt-track"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "track", "--all")
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-gt-reconcile"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "reconcile")
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-gt-restack"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "restack")
+  revisions.refresh()
+"""
+
+[[bindings]]
+action = "jj-gt-submit-selected"
+seq = ["x", "s"]
+scope = "revisions"
+desc = "jj-gt submit stack ending at cursor"
+
+[[bindings]]
+action = "jj-gt-fetch"
+seq = ["x", "f"]
+scope = "revisions"
+desc = "jj-gt fetch"
+
+[[bindings]]
+action = "jj-gt-track-selected"
+seq = ["x", "t"]
+scope = "revisions"
+desc = "jj-gt track bookmarks on focused commit"
+
+[[bindings]]
+action = "jj-gt-submit"
+seq = ["x", "S"]
+scope = "revisions"
+desc = "jj-gt submit every stack"
+
+[[bindings]]
+action = "jj-gt-track"
+seq = ["x", "T"]
+scope = "revisions"
+desc = "jj-gt track every stack"
+
+[[bindings]]
+action = "jj-gt-reconcile"
+seq = ["x", "r"]
+scope = "revisions"
+desc = "jj-gt reconcile"
+
+[[bindings]]
+action = "jj-gt-restack"
+seq = ["x", "R"]
+scope = "revisions"
+desc = "jj-gt restack (rebase all local stacks onto trunk)"
+```
+
+The `revisions.refresh()` after each `jj_async` repaints jjui's
+revisions pane so the post-submit bookmark moves are visible
+immediately.
 
 ## How parent derivation works
 
@@ -190,7 +412,7 @@ suite is partitioned into three tiers:
 ### One-time setup for the live GitHub tests
 
 ```bash
-just setup-live-fixture
+bun run scripts/setup-live-test-fixture/index.ts   # run from repo root
 ```
 
 This creates `<your-gh-user>/jj-gt-live-tests` on github, pushes a
@@ -200,11 +422,10 @@ query against. Idempotent — re-running on an existing setup is a no-op.
 Once the fixture exists:
 
 ```bash
-just test-live-gh       # gh pr list smoke
-just test-live-submit   # full jj-gt submit end-to-end; creates + closes 2 PRs per run
+devenv tasks run live:test   # gh_live + gt_submit_live end-to-end; creates + closes PRs per run
 ```
 
-Both recipes set the required env vars (`JJ_GT_LIVE_GH=1`,
+The task sets the required env vars (`JJ_GT_LIVE_GH=1`,
 `JJ_GT_LIVE_SUBMIT=1`, `JJ_GT_LIVE_REPO`, `JJ_GT_LIVE_REPO_URL`)
 automatically; override on the command line if you want to point
 them at a different fixture repo.
