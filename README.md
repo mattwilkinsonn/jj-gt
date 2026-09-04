@@ -3,6 +3,10 @@
 Bridge [jj](https://jj-vcs.github.io) bookmark stacks and
 [Graphite](https://graphite.dev/) (`gt`) PR stacks in one command.
 
+## Requirements
+
+jj-gt targets jj 0.42 semantics. jj 0.44 and later changed `jj git fetch` behavior.
+
 `jj` doesn't know about gt's stack model. gt tracks stack relationships via
 per-branch `refs/branch-metadata/<branch>` git refs that record each branch's
 parent. jj doesn't create or maintain these refs, so:

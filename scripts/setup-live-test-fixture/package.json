@@ -4,8 +4,8 @@
 	"description": "One-time setup for the jj-gt live-test fixture repo (creates the GitHub repo + a persistent fixture PR).",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/mattwilkinsonn/zireael.git",
-		"directory": "tools/setup-live-test-fixture"
+		"url": "https://github.com/mattwilkinsonn/jj-gt.git",
+		"directory": "scripts/setup-live-test-fixture"
 	},
 	"license": "MIT",
 	"module": "index.ts",

@@ -1,9 +1,11 @@
 # jj-gt CI — EJECTED from the dev-shared reusable workflow because jj-gt needs its own job
-# graph: a fork-gated live-test job carrying JJ_GT_LIVE_* secrets that the parametric reusable
-# workflow can't express. Shares only the setup-devenv composite action for the bootstrap.
+# graph (its own gate wiring + the standalone toolchain pin). Shares only the setup-devenv
+# composite action for the bootstrap.
 name: ci
 on:
   pull_request:
+  push:
+    branches: [main]
 jobs:
   gate:
     name: gate
@@ -13,26 +15,7 @@ jobs:
       contents: read
       id-token: write # the Determinate Nix action needs OIDC
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: mattwilkinsonn/dev-shared/setup-devenv@v1
       - name: devenv tasks run ci
         run: devenv shell -- devenv tasks run ci
-
-  live-test:
-    name: live-test
-    # Fork PRs get no secrets, so skip live-test on them (it would fail auth). Only runs on
-    # same-repo PRs where JJ_GT_LIVE_* secrets are available.
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mattwilkinsonn/dev-shared/setup-devenv@v1
-      - name: devenv tasks run live:test
-        env:
-          GH_TOKEN: ${{ secrets.JJ_GT_LIVE_GH_TOKEN }}
-          JJ_GT_LIVE_REPO: ${{ secrets.JJ_GT_LIVE_REPO }}
-        run: devenv shell -- devenv tasks run live:test

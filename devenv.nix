@@ -28,11 +28,11 @@
     "ci:fmt".exec = "cargo fmt --check";
     "ci:clippy".exec = "cargo clippy --all-targets -- -D warnings";
     "ci:test".exec =
-      "cargo nextest run --no-fail-fast --no-tests=warn -E 'not (test(gh_live) | test(gt_submit_live))'";
+      "cargo nextest run --no-fail-fast --no-tests=warn -E 'not (binary(gh_live) | binary(gt_submit_live) | binary(links_live))'";
     # Live suite — opt-in, never in the ci: gate. Needs JJ_GT_LIVE_* env + gh auth + a fixture
     # repo. Namespaced (live:test) because devenv rejects a bare task name — same rule as ci:*.
     "live:test" = {
-      exec = "cargo nextest run --no-fail-fast -E 'test(gh_live) | test(gt_submit_live)'";
+      exec = "cargo nextest run --no-fail-fast -E 'binary(gh_live) | binary(gt_submit_live) | binary(links_live)'";
       env = {
         JJ_GT_LIVE_GH = "1";
         JJ_GT_LIVE_SUBMIT = "1";

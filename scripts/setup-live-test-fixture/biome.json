@@ -1,3 +1,13 @@
 {
-	"extends": "//"
+	"$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
+	"root": true,
+	"formatter": { "indentStyle": "tab" },
+	"linter": { "enabled": true },
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	}
 }

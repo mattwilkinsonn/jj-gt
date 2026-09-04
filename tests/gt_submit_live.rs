@@ -5,7 +5,7 @@
 //!
 //! * `JJ_GT_LIVE_SUBMIT=1`
 //! * `JJ_GT_LIVE_REPO=<owner>/<repo>` — same fixture repo the gh
-//!   tests use (created by `scripts/setup-live-test-fixture.sh`).
+//!   tests use (created by `scripts/setup-live-test-fixture`).
 //! * `JJ_GT_LIVE_REPO_URL=<git-url>` — fetchable + pushable URL for
 //!   that repo (typically `https://github.com/<owner>/<repo>.git`
 //!   with `gh auth setup-git` already done).

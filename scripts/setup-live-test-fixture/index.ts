@@ -35,7 +35,7 @@ const PR_BODY =
 	"Persistent fixture PR for jj-gt live tests. Do not merge. Will be re-closed on every setup run.";
 
 const CLOSE_COMMENT =
-	"Auto-closed by tools/setup-live-test-fixture/index.ts — fixture PRs stay closed to avoid cluttering the Graphite home page. Do not delete the branch.";
+	"Auto-closed by scripts/setup-live-test-fixture/index.ts — fixture PRs stay closed to avoid cluttering the Graphite home page. Do not delete the branch.";
 
 // Heredoc content of fixture/README.md, verbatim (backticks and the
 // trailing newline are part of the fixture the tests reference).
