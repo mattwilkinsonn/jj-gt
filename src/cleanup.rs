@@ -1678,7 +1678,7 @@ pub fn orphan_rebase_phase(
 
     // `list_local_bookmarks` filters out conflicted bookmarks
     // (they have no `normal_target()` commit id — see
-    // `tools/jj-gt/src/jj.rs` Lines 98-104). If we computed
+    // `src/jj.rs` Lines 98-104). If we computed
     // `deleted` from just `remaining_names`, a still-present but
     // conflicted parent would land in `deleted` and its children
     // would get misclassified as orphaned + rebased onto trunk.
@@ -1982,7 +1982,7 @@ fn reanchor_children_of_moved_parents(
     let remaining = list_local_bookmarks(jj)?;
     // `list_local_bookmarks` deliberately filters out conflicted
     // bookmarks (they have no `normal_target()` commit id — see
-    // `tools/jj-gt/src/jj.rs`). Folding `conflicted` back into
+    // `src/jj.rs`). Folding `conflicted` back into
     // `remaining_names` here keeps a conflicted child from being
     // silently skipped by the `!remaining_names.contains(&sb.name)`
     // gate below — without the fold, the downstream

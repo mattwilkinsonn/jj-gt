@@ -2,8 +2,9 @@
 # jj-gt dev shell. The shared toolchain (rust-overlay pin, linters, cargo-nextest, jj, and
 # the ci:markdownlint/actionlint/nixfmt/deadnix lint task set) comes from the dev-shared
 # module imported in devenv.yaml. This file adds only what is jj-gt-specific: the gh CLI its
-# live tests drive, the hk pre-push runner, the crate's own ci:* tasks (default test excludes
-# the live suite), the opt-in live-test task, and the hk pre-push gate install.
+# live tests drive, Bun for the fixture script, the hk pre-push runner, the crate's own ci:*
+# tasks (default test excludes the live suite), the opt-in live-test task, and the hk pre-push
+# gate install.
 {
   # Pin jujutsu to 0.42.0. jj-gt's stack-reconciliation logic targets jj 0.42 semantics;
   # jj 0.44 (what rolling nixpkgs / the dev-shared module now provides) changed `jj git fetch`
@@ -18,17 +19,20 @@
   packages = with pkgs; [
     # jj-gt's live integration tests (gh_live / gt_submit_live) shell out to the gh CLI.
     gh
+    bun
     # hk runs the pre-push gate (from its flake input — not in nixpkgs). Not a test backend here.
     inputs.hk.packages.${pkgs.stdenv.system}.hk
   ];
   # Crate checks. Named ci:* so `devenv tasks run ci` (namespace-prefix selector) runs them
   # with the shared ci:markdownlint/actionlint/nixfmt/deadnix. NEVER a bare `ci` task.
-  # ci:test excludes the live (network) suite; those run only in the fork-gated CI live-test job.
+  # ci:test excludes the live (network) suite; those run only locally via 'devenv tasks run live:test'.
   tasks = {
     "ci:fmt".exec = "cargo fmt --check";
     "ci:clippy".exec = "cargo clippy --all-targets -- -D warnings";
     "ci:test".exec =
       "cargo nextest run --no-fail-fast --no-tests=warn -E 'not (binary(gh_live) | binary(gt_submit_live) | binary(links_live))'";
+    "ci:script".exec =
+      "cd scripts/setup-live-test-fixture && bun install --frozen-lockfile && bunx biome check . && bunx tsc --noEmit && bun test";
     # Live suite — opt-in, never in the ci: gate. Needs JJ_GT_LIVE_* env + gh auth + a fixture
     # repo. Namespaced (live:test) because devenv rejects a bare task name — same rule as ci:*.
     "live:test" = {

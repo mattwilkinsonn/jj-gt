@@ -399,7 +399,8 @@ bookmark sits directly on trunk.
 
 ## License
 
-Apache-2.0. See [LICENSE](./LICENSE).
+Dual-licensed under MIT ([LICENSE-MIT](./LICENSE-MIT)) or Apache-2.0
+([LICENSE-APACHE](./LICENSE-APACHE)), at your option.
 
 ## Development
 
@@ -410,7 +411,7 @@ suite is partitioned into three tiers:
 2. **`tests/gt_live.rs`** — drives `gt track` against a tempdir
    colocated jj+git repo. Needs `gt` + `jj` on PATH; no network.
    Skipped silently if either binary is missing.
-3. **`tests/gh_live.rs` + `tests/gt_submit_live.rs`** — hit real
+3. **`tests/gh_live.rs` + `tests/gt_submit_live.rs` + `tests/links_live.rs`** — hit real
    GitHub. Off by default; opt in via env vars (see below).
 
 ### One-time setup for the live GitHub tests
@@ -426,8 +427,10 @@ query against. Idempotent — re-running on an existing setup is a no-op.
 Once the fixture exists:
 
 ```bash
-devenv tasks run live:test   # gh_live + gt_submit_live end-to-end; creates + closes PRs per run
+devenv tasks run live:test   # gh_live + gt_submit_live + links_live end-to-end; creates + closes PRs per run
 ```
+
+The live suite is local-only (there is no CI job); run it via `devenv tasks run live:test`.
 
 The task sets the required env vars (`JJ_GT_LIVE_GH=1`,
 `JJ_GT_LIVE_SUBMIT=1`, `JJ_GT_LIVE_REPO`, `JJ_GT_LIVE_REPO_URL`)
