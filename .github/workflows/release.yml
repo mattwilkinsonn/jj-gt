@@ -48,6 +48,7 @@ jobs:
           else
               tag="${GITHUB_REF_NAME}"
           fi
+          case "$tag" in *[$'\n\r']*) echo "error: tag contains a newline" >&2; exit 1 ;; esac
           [[ "$tag" =~ ^v[0-9][A-Za-z0-9._-]*$ ]] || { echo "error: invalid tag: $tag" >&2; exit 1; }
           version="${tag#v}"
           if [[ "$tag" == *-* ]]; then
@@ -124,10 +125,12 @@ jobs:
           cp README.md "$stage/"
           cp LICENSE-MIT LICENSE-APACHE "$stage/"
           echo "dir=$stage" >> "$GITHUB_OUTPUT"
+
       - name: Codesign (macOS)
         if: runner.os == 'macOS'
         run: |
           codesign -s - "${{ steps.stage_jj_gt.outputs.dir }}/jj-gt"
+
       - name: Tar + sha256
         id: pack
         env:
@@ -141,6 +144,14 @@ jobs:
               (cd "$(dirname "$stage")" && shasum -a 256 "$(basename "$stage").tar.gz" > "$(basename "$stage").tar.gz.sha256")
           done
 
+      - name: Upload Rust artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-${{ matrix.target_name }}
+          path: |
+            ${{ runner.temp }}/jj-gt-v*.tar.gz
+            ${{ runner.temp }}/jj-gt-v*.sha256
+          if-no-files-found: error
 
   # ----- Create the GitHub Release and attach every tarball.
   publish-release:
@@ -232,6 +243,11 @@ jobs:
           # token into .git/config's extraheader, so plain `git push` Just
           # Works without re-auth.
           token: ${{ steps.app-token.outputs.token }}
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
       - name: Extract per-platform SHA256s for every tool
         id: shas
         env:
