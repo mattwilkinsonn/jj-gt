@@ -320,7 +320,7 @@ jobs:
               echo "error: Formula/jj-gt.rb not found in mattwilkinsonn/homebrew-tap" >&2
               exit 1
           fi
-          if grep -q 'disable!' tap/Formula/jj-gt.rb; then
+          if grep -qE '^[[:space:]]*disable!' tap/Formula/jj-gt.rb; then
               echo "error: tap Formula/jj-gt.rb is disabled; revive it before bumping" >&2
               exit 1
           fi
