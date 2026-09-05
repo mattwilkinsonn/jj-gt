@@ -22,6 +22,14 @@ pub struct Cli {
     #[arg(long, global = true, env = "JJ_GT_LOG", default_value = "warn")]
     pub log_level: String,
 
+    /// Print the full subprocess output of every step (jj, gt, gh).
+    /// By default jj-gt captures and summarises that output; passing
+    /// `-v` dumps it as it comes, useful when something is going
+    /// subtly wrong inside one of the subprocess invocations and
+    /// the structured summary is hiding the real signal.
+    #[arg(long, short = 'v', global = true)]
+    pub verbose: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -30,6 +38,18 @@ pub struct Cli {
 pub enum Command {
     /// Track + submit selected bookmarks as a stack (drives
     /// `gt submit --stack` end-to-end).
+    ///
+    /// The full ancestor chain from trunk up to each `-b <tip>` is
+    /// submitted automatically — there's no separate `--stack` flag
+    /// because there's no other mode. `jj-gt submit -b head` walks
+    /// back through every bookmark between `head` and trunk,
+    /// tracks them with gt in bottom→top order, and pushes the
+    /// whole stack via `gt submit --stack`. Multiple `-b` flags
+    /// for unrelated tips submit each as its own independent stack
+    /// — `jj-gt submit -b a -b b` where `a` and `b` sit on
+    /// disjoint chains rooted at trunk fans out to two
+    /// `gt submit --stack` calls, one per tip. To submit a subset
+    /// of a single stack, name each bookmark with its own `-b` flag.
     Submit {
         #[command(flatten)]
         bookmarks: BookmarkArgs,
@@ -55,6 +75,26 @@ pub enum Command {
         /// `--no-verify` to `git push`).
         #[arg(long)]
         no_hooks: bool,
+
+        /// Run pre-push hooks against the full trunk..tip range
+        /// instead of per-bookmark. Faster — one hook invocation
+        /// instead of N — but hides intermediate-commit failures
+        /// (a fmt violation in commit B that commit C fixes will
+        /// pass when checked against trunk..tip but fail in CI
+        /// which builds each commit independently). Recovery flag.
+        #[arg(long, conflicts_with = "no_hooks")]
+        hooks_tip_only: bool,
+
+        /// Run per-bookmark pre-push hooks sequentially instead of
+        /// in parallel. Default is parallel: one ephemeral worktree
+        /// per bookmark, all hook runners executing concurrently
+        /// (output captured + replayed in completion order). Falls
+        /// back to sequential automatically when the stack has only
+        /// one bookmark. Use this flag when the parallel runs are
+        /// thrashing disk / sccache or you want the live runner
+        /// progress bar for a multi-bookmark stack.
+        #[arg(long, conflicts_with_all = ["no_hooks", "hooks_tip_only"])]
+        hooks_sequential: bool,
 
         /// Force a specific hook runner. Forwarded as the `runner`
         /// arg of `jj_hooks::run_for_revset`.
@@ -114,6 +154,15 @@ pub enum Command {
         #[arg(long)]
         auto: bool,
 
+        /// Skip the pre-fetch `jj git export` step. Default off:
+        /// fetch exports JJ's bookmark view into git refs first so
+        /// that bookmark moves made in another workspace (sharing
+        /// the same `.jj/`) aren't reverted by `jj git fetch`'s
+        /// auto-import. Set this when you specifically want to
+        /// observe git's pre-export state.
+        #[arg(long)]
+        no_export: bool,
+
         /// Print what would happen at every step.
         #[arg(long)]
         dry_run: bool,
@@ -138,8 +187,85 @@ pub enum Command {
         trunk: Option<String>,
     },
 
-    /// Print suggested aliases + setup reminders.
-    Init,
+    /// Reconcile gt's tracking metadata + (optionally) remote refs
+    /// with jj's current view of the bookmark graph. Standalone
+    /// version of the pre-submit reconciliation step that
+    /// `jj-gt submit` runs internally. Useful after an interrupted
+    /// submit or a manual `jj rebase` outside the submit flow.
+    Reconcile {
+        /// Remote to reconcile against. Default: `origin`.
+        #[arg(long, default_value = "origin", add = clap_complete::ArgValueCompleter::new(remote_value_completer))]
+        remote: String,
+
+        /// Trunk to walk back to. Default: read from gt's repo config
+        /// (.git/.graphite_repo_config), then fall back to `main`.
+        #[arg(long)]
+        trunk: Option<String>,
+
+        /// Also `jj git push --bookmark <name>` each bookmark in the
+        /// active stack. Default off — reconcile-only updates gt's
+        /// tracking metadata without touching remote refs. Pass this
+        /// to bring the remote in sync with locally-rebased SHAs
+        /// (jj's force-with-lease default protects against
+        /// collaborator-race overrides).
+        #[arg(long)]
+        push: bool,
+
+        /// Print what would happen at every step.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Rebase every local stack onto trunk — the explicit "rewrite
+    /// my work" sibling to `fetch`. Conflict-producing rebases land
+    /// their conflicts as commit markers (jj's conflict-in-commit
+    /// model means rebases always complete); the per-stack summary
+    /// surfaces what needs `jj resolve`.
+    ///
+    /// Default behaviour: discover every local-only bookmark
+    /// authored by the current user (`bookmarks() & mine() &
+    /// ~::main@origin`), group into independent stacks, rebase each
+    /// onto trunk. End-of-run summary lists per-stack status.
+    /// Exit non-zero if any stack ended conflicted.
+    Restack {
+        /// Restack only the stack containing this bookmark. Same
+        /// default discovery + rebase otherwise.
+        #[arg(long, short = 'b')]
+        bookmark: Option<String>,
+
+        /// Trunk to rebase onto. Default: read from gt's repo config
+        /// (.git/.graphite_repo_config), then fall back to `main`.
+        /// Resolved against the remote — the actual destination is
+        /// `<trunk>@<remote>`.
+        #[arg(long)]
+        trunk: Option<String>,
+
+        /// Remote to rebase against. Default: `origin`.
+        #[arg(long, default_value = "origin", add = clap_complete::ArgValueCompleter::new(remote_value_completer))]
+        remote: String,
+
+        /// Halt at the first conflicted stack rather than proceeding
+        /// through the rest. Cautious mode for users who want
+        /// to resolve one conflict before facing the next.
+        #[arg(long)]
+        stop_on_conflict: bool,
+
+        /// Print what would happen at every step — discover stacks
+        /// + report them, don't actually rebase.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Interactive setup: prints suggested aliases + setup
+    /// reminders, then optionally installs jjui actions/bindings so
+    /// `jj-gt submit / fetch / track / reconcile` are reachable
+    /// from inside [jjui](https://github.com/idursun/jjui).
+    Init {
+        /// Skip the prompts; only print the setup reminders.
+        /// Useful in scripts and one-shot runs.
+        #[arg(long)]
+        print_only: bool,
+    },
 
     /// Print a shell completion script.
     Completions {
@@ -170,8 +296,11 @@ pub struct BookmarkArgs {
     #[arg(short = 'c', long, action = clap::ArgAction::Append)]
     pub change: Vec<String>,
 
-    /// Operate on every local bookmark that's an ancestor of `@` and
-    /// a descendant of trunk.
+    /// Operate on every local bookmark across every stack in the
+    /// repo (`bookmarks() & trunk..`), excluding trunk + `gtmq_*`
+    /// queue branches. Use this for "submit all my stacks" /
+    /// "push all my stacks" — distinct from the bareword default,
+    /// which operates only on the @-ancestor stack.
     #[arg(long)]
     pub all: bool,
 
@@ -245,7 +374,7 @@ pub struct SubmitArgs {
     pub target_trunk: Option<String>,
 
     /// Open the PR(s) in your browser after submitting.
-    #[arg(short = 'v', long)]
+    #[arg(long)]
     pub view: bool,
 
     /// Open the PR-metadata editor in a browser instead of CLI.
@@ -260,9 +389,16 @@ pub struct SubmitArgs {
     #[arg(long)]
     pub rerequest_review: bool,
 
-    /// Push even if the branch hasn't changed (recovery flag).
+    /// Skip the default `--always` flag passed to `gt submit`. By
+    /// default jj-gt invokes `gt submit --always` so Graphite's
+    /// view (PR base refs, stack metadata on web) always reflects
+    /// the current jj state, even when gt would otherwise think no
+    /// branch has changed. Set this flag to opt out — useful when
+    /// you specifically want gt's "skip unchanged" heuristic, e.g.
+    /// repeated submits during PR review where the local stack
+    /// hasn't moved.
     #[arg(long)]
-    pub always: bool,
+    pub no_always: bool,
 
     /// True force-push (overrides force-with-lease default).
     #[arg(short = 'f', long)]
@@ -275,6 +411,15 @@ pub struct SubmitArgs {
     /// Print summary, ask to confirm, then submit.
     #[arg(short = 'C', long)]
     pub confirm: bool,
+
+    /// Don't hoist magic-word issue references (`Closes SEA-1`,
+    /// `Refs #42`, …) from the bookmark's commit messages into the PR
+    /// description. By default jj-gt scans each submitted bookmark's
+    /// commit range and reconciles a managed block of `Closes`/`Refs`
+    /// lines into the PR body, so the squash-merge commit carries the
+    /// references the tracker needs to link/close issues on merge.
+    #[arg(long)]
+    pub no_links: bool,
 
     /// Append this arg to `gt submit` verbatim. Repeat for multiple.
     #[arg(long = "gt-arg", action = clap::ArgAction::Append)]

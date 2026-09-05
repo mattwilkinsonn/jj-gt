@@ -1,0 +1,21 @@
+{
+	"name": "setup-live-test-fixture",
+	"version": "0.1.0",
+	"description": "One-time setup for the jj-gt live-test fixture repo (creates the GitHub repo + a persistent fixture PR).",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/mattwilkinsonn/jj-gt.git",
+		"directory": "scripts/setup-live-test-fixture"
+	},
+	"license": "MIT",
+	"module": "index.ts",
+	"type": "module",
+	"bin": {
+		"setup-live-test-fixture": "./index.ts"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.2.0",
+		"@types/bun": "latest",
+		"typescript": "^5"
+	}
+}

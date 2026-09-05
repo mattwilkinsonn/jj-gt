@@ -1,17 +1,17 @@
 [package]
 name = "jj-gt"
-version = "0.1.0"
-edition = "2024"
-license = "Apache-2.0"
 description = "Bridge jj bookmark stacks and Graphite (gt) PR stacks — one command per stack submit/fetch/status"
+version = "0.3.11"
+edition = "2024"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/mattwilkinsonn/jj-gt"
+authors = ["Matt Wilkinson <mattwilki17@gmail.com>"]
 readme = "README.md"
 
-# cargo-binstall metadata. `cargo binstall jj-gt` will fetch the release
-# tarball matching the user's platform from our GitHub Releases page, untar
-# it, and drop the binary into ~/.cargo/bin. The friendly slug names
-# (darwin-arm64, linux-x64, linux-arm64) come from .github/workflows/release.yml
-# — keep them aligned with that file.
+# cargo-binstall metadata. `cargo binstall jj-gt` fetches the release
+# tarball matching the user's platform from this repo's GitHub Releases
+# page. Slug names (darwin-arm64, linux-x64, linux-arm64) come from
+# .github/workflows/release.yml — keep them aligned.
 [package.metadata.binstall]
 pkg-fmt = "tgz"
 
@@ -39,12 +39,9 @@ path = "src/lib.rs"
 anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive", "env"] }
 clap_complete = { version = "4.6.5", features = ["unstable-dynamic"] }
-# Hooks runner shared with jj-hp. Published on crates.io as `jj-hooks`.
-# 0.2.1 fixed the multi-commit-revset bug in `run_for_revset_outcome`
-# (was checking only the tip's 1-commit parent→tip slice instead of
-# the full `roots(revset)-..heads(revset)` range); required by
-# jj-gt's stack-submit hook gate.
-jj_hooks = { package = "jj-hooks", version = "0.2.1" }
+dialoguer = { version = "0.12.0", default-features = false }
+jj-hooks = "0.3.11"
+owo-colors = { version = "4.3.0", features = ["supports-colors"] }
 regex = "1.12.3"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.145"
@@ -60,10 +57,3 @@ tempfile = "3.27.0"
 [profile.release]
 lto = "thin"
 strip = "symbols"
-
-# TEMPORARY: until `jj-hooks 0.2.1` is published to crates.io, point
-# the dep at the sibling working tree so the multi-commit-revset
-# fix is exercised end-to-end. Remove this block once 0.2.1 is on
-# the registry.
-[patch.crates-io]
-jj-hooks = { path = "../jj-hooks" }

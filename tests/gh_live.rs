@@ -4,7 +4,7 @@
 //!
 //! * `JJ_GT_LIVE_GH=1` — opt-in to live network tests.
 //! * `JJ_GT_LIVE_REPO=<owner>/<repo>` — repo to query against. Set
-//!   this to whatever repo `scripts/setup-live-test-fixture.sh`
+//!   this to whatever repo `scripts/setup-live-test-fixture` (bun index.ts)
 //!   created (default: `<your-gh-user>/jj-gt-live-tests`).
 //!
 //! The fixture is a single long-lived branch + PR named
@@ -88,7 +88,7 @@ fn find_pr_for_fixture_branch_returns_persistent_pr() {
     let pr = pr.unwrap_or_else(|| {
         panic!(
             "no PR found for fixture branch `{FIXTURE_BRANCH}` in {repo}; \
-             did you run scripts/setup-live-test-fixture.sh?"
+             did you run scripts/setup-live-test-fixture (bun run index.ts)?"
         )
     });
 
