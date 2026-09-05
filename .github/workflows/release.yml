@@ -3,8 +3,9 @@ name: release
 # Triggered by pushing a version tag (`jj git push --tag v0.3.12`).
 #
 # Builds release artifacts for jj-gt, attaches them to a GitHub
-# Release, bumps Formula/jj-gt.rb in-place, and publishes the crate
-# to crates.io. The per-platform tarballs are named so the Homebrew
+# Release, bumps Formula/jj-gt.rb in the consolidated Homebrew tap
+# repo (mattwilkinsonn/homebrew-tap), and publishes the crate to
+# crates.io. The per-platform tarballs are named so the Homebrew
 # formula can find its own platform-specific download.
 
 "on":
@@ -195,11 +196,30 @@ jobs:
           if [ "$PRERELEASE" = "true" ]; then
               args+=(--prerelease)
           fi
-          gh release create "$TAG" "${args[@]}" \
-              release/jj-gt-v*.tar.gz \
-              release/jj-gt-v*.sha256
+          # `gh release create` hard-fails when the Release already exists,
+          # which cascades skips into bump-tap + publish-crates on any
+          # workflow_dispatch re-run. Create only when absent; the assets
+          # are pushed by the upload step below with --clobber, so a first
+          # run and a re-run converge on the same asset set.
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              || gh release create "$TAG" "${args[@]}"
 
-  # ----- Bump Formula/jj-gt.rb with the new version + sha256s.
+      # Runs on every release, pre-existing or freshly created, so the
+      # assets are refreshed idempotently rather than only attached by the
+      # one-shot create.
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" \
+              release/jj-gt-v*.tar.gz \
+              release/jj-gt-v*.sha256 \
+              --clobber --repo "$GITHUB_REPOSITORY"
+
+  # ----- Bump Formula/jj-gt.rb in mattwilkinsonn/homebrew-tap with the
+  # new version + sha256s.
   bump-tap:
     name: Bump Homebrew tap formulae
     needs: [meta, build-rust, publish-release]
@@ -222,26 +242,46 @@ jobs:
       #   - App ID:        ${{ vars.RELEASE_BOT_APP_ID }}     (repo variable)
       #   - Private key:   ${{ secrets.RELEASE_BOT_PRIVATE_KEY }} (repo secret)
       #   - Permissions:   contents:write + metadata:read (least-privilege)
-      #   - Installed on:  this repo only
+      #   - Installed on:  this repo + mattwilkinsonn/homebrew-tap
+      #                    (the formula bump commits land in the tap)
       #   - Bypass actor:  main branch ruleset
       - uses: actions/create-github-app-token@v2
         id: app-token
         with:
           app-id: ${{ vars.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          owner: mattwilkinsonn
+          # `repositories:` REPLACES the current-repo default rather than
+          # extending it, so this repo has to be listed alongside the tap
+          # or the self checkout that reuses this token fails to auth.
+          repositories: |
+            jj-gt
+            homebrew-tap
 
       - uses: actions/checkout@v6
         with:
-          # The workflow is triggered by a tag, but the tap bump must be
-          # committed on top of current main. Checking out the tag and
-          # pushing HEAD:main races any main update after the tag was cut
-          # and gets rejected as non-fast-forward.
+          # First checkout: this repo, solely to supply
+          # .github/scripts/bump-formulae.py to the rewrite step below. The
+          # formula it rewrites lives in the tap checkout that follows.
           ref: main
+          # Retained as-is; the tap checkout below carries its own
+          # fetch-depth: 0 for the rebase in Commit + push.
           fetch-depth: 0
-          # Checkout with the App token so the local git remote carries it
-          # for the `git push` later. actions/checkout also writes this
-          # token into .git/config's extraheader, so plain `git push` Just
-          # Works without re-auth.
+          # Kept on the App token so both checkouts share one credential.
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: actions/checkout@v6
+        with:
+          # Second checkout: the consolidated tap repo, where the formula
+          # now lives. The bump rewrites tap/Formula/jj-gt.rb and pushes to
+          # the tap's main; the self checkout above only supplies
+          # .github/scripts/bump-formulae.py.
+          repository: mattwilkinsonn/homebrew-tap
+          path: tap
+          ref: main
+          # fetch-depth: 0 is required — Commit + push rebases onto
+          # origin/main, which fails across a depth-1 shallow boundary.
+          fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
       - name: Download all artifacts
         uses: actions/download-artifact@v8
@@ -269,7 +309,23 @@ jobs:
               done
           done
 
-      - name: Rewrite every formula in-place
+      # Fail closed. bump-formulae.py skips a missing formula and returns
+      # 0, and Commit + push's own `git diff --quiet Formula/` then exits 0
+      # with "nothing to bump" — so a missing or disabled tap formula would
+      # otherwise produce a GREEN bump-tap that shipped nothing.
+      - name: Verify the tap formula is present and enabled
+        run: |
+          set -euo pipefail
+          if [ ! -f tap/Formula/jj-gt.rb ]; then
+              echo "error: Formula/jj-gt.rb not found in mattwilkinsonn/homebrew-tap" >&2
+              exit 1
+          fi
+          if grep -q 'disable!' tap/Formula/jj-gt.rb; then
+              echo "error: tap Formula/jj-gt.rb is disabled; revive it before bumping" >&2
+              exit 1
+          fi
+
+      - name: Rewrite the tap formula in-place
         env:
           VER: ${{ needs.meta.outputs.version }}
           # Pass every per-tool-per-slug sha as one env var per
@@ -278,11 +334,17 @@ jobs:
           JJ_GT_DARWIN_ARM64: ${{ steps.shas.outputs.jj-gt-darwin-arm64 }}
           JJ_GT_LINUX_X64: ${{ steps.shas.outputs.jj-gt-linux-x64 }}
           JJ_GT_LINUX_ARM64: ${{ steps.shas.outputs.jj-gt-linux-arm64 }}
-        run: python3 .github/scripts/bump-formulae.py
+        # CWD must be the tap checkout: the script resolves Path("Formula")
+        # relative to CWD. The script itself lives in the self checkout at
+        # the workspace root.
+        working-directory: tap
+        run: python3 "$GITHUB_WORKSPACE/.github/scripts/bump-formulae.py"
 
       - name: Commit + push
         env:
           TAG: ${{ needs.meta.outputs.tag }}
+        # Run in the tap checkout so `origin` is mattwilkinsonn/homebrew-tap.
+        working-directory: tap
         run: |
           set -euo pipefail
           if git diff --quiet Formula/; then
@@ -325,12 +387,12 @@ jobs:
       - name: Tap, install, and test every formula
         run: |
           set -euo pipefail
-          brew tap mattwilkinsonn/jj-gt https://github.com/mattwilkinsonn/jj-gt
-          brew trust mattwilkinsonn/jj-gt
+          brew tap mattwilkinsonn/tap
+          brew trust mattwilkinsonn/tap
           for formula in jj-gt; do
             echo "::group::${formula}"
-            brew install "mattwilkinsonn/jj-gt/${formula}"
-            brew test "mattwilkinsonn/jj-gt/${formula}"
+            brew install "mattwilkinsonn/tap/${formula}"
+            brew test "mattwilkinsonn/tap/${formula}"
             echo "::endgroup::"
           done
 
