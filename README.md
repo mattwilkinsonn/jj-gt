@@ -105,14 +105,28 @@ cargo binstall jj-gt
 ```
 
 This pulls a prebuilt binary from the GitHub Releases page — no compile
-step.
+step. At 0.3.12 and later, `cargo binstall jj-gt` pulls from the standalone
+repository's Releases; older pins fall back to a source build.
 
 ### Via Homebrew tap
 
 ```bash
-brew tap mattwilkinsonn/jj-gt https://github.com/mattwilkinsonn/jj-gt
-brew install mattwilkinsonn/jj-gt/jj-gt
+brew tap mattwilkinsonn/tap
+brew install mattwilkinsonn/tap/jj-gt
 ```
+
+### Migrating from the zireael monorepo tap
+
+Uninstall the old `jj-gt` keg and untap the old zireael monorepo tap (or its
+per-tool tap) before tapping and installing from the consolidated tap. Homebrew
+refuses to install a same-named formula from a second tap while the old one is
+still installed.
+
+For `cargo binstall jj-gt` versions through 0.3.11, the `{repo}`-relative
+download URLs and crates.io `repository` metadata still point at the soon-
+private zireael monorepo, so those old versions fall back to a slow source
+build. Version 0.3.12 is the first release to re-anchor that metadata at the
+standalone repository.
 
 ### From source
 
