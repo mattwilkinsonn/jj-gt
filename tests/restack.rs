@@ -12,14 +12,19 @@ use jj_gt::jj::JjCli;
 
 fn jj_available() -> bool {
     Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .arg("--version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
+// The fixtures push bookmarks to a local remote, so the commits these tests
+// rewrite are `remote_bookmarks()`; a developer's `immutable_heads()` alias
+// would mark them immutable. Scrub user config so spawned jj ignores it.
 fn jj(cwd: &Path, args: &[&str]) {
     let out = Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -53,6 +58,16 @@ fn build_two_stack_fixture() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
     jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -246,6 +261,7 @@ fn run_restack_rebases_both_stacks_onto_advanced_main() {
     // The rebased bookmarks should now have post_main as an ancestor.
     let upper_tip = jj_gt::jj::resolve_commit_id(&jj_cli, "upper-tip").unwrap();
     let upper_ancestry: std::collections::BTreeSet<String> = Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args([
             "log",
             "-r",
@@ -272,6 +288,7 @@ fn run_restack_rebases_both_stacks_onto_advanced_main() {
 
     let sibling_tip = jj_gt::jj::resolve_commit_id(&jj_cli, "sibling-tip").unwrap();
     let sibling_ancestry: std::collections::BTreeSet<String> = Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args([
             "log",
             "-r",
@@ -466,6 +483,16 @@ fn run_restack_reports_nonzero_conflict_count_when_rebase_conflicts() {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
     jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],

@@ -46,8 +46,12 @@ fn isolate_graphite_config(tmp: &Path) {
     }
 }
 
+// The fixtures push bookmarks to a local remote, so the commits these tests
+// rewrite are `remote_bookmarks()`; a developer's `immutable_heads()` alias
+// would mark them immutable. Scrub user config so spawned jj ignores it.
 fn jj(cwd: &Path, args: &[&str]) {
     let out = Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -105,6 +109,16 @@ fn build_three_stack_fixture() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     isolate_graphite_config(tmp.path());
     jj(tmp.path(), &["git", "init", "--colocate"]);
+    jj(
+        tmp.path(),
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         tmp.path(),
         &["config", "set", "--repo", "user.email", "test@example.com"],

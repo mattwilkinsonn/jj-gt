@@ -70,14 +70,19 @@ impl Drop for EnvVarGuard {
 
 fn jj_available() -> bool {
     Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .arg("--version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
+// The fixtures push bookmarks to a local remote, so the commits these tests
+// rewrite are `remote_bookmarks()`; a developer's `immutable_heads()` alias
+// would mark them immutable. Scrub user config so spawned jj ignores it.
 fn jj(cwd: &Path, args: &[&str]) {
     let out = Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -110,6 +115,7 @@ fn git(cwd: &Path, args: &[&str]) {
 
 fn jj_capture(cwd: &Path, args: &[&str]) -> String {
     let out = Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -128,6 +134,16 @@ fn jj_capture(cwd: &Path, args: &[&str]) -> String {
 fn build_workspace() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     jj(tmp.path(), &["git", "init", "--colocate"]);
+    jj(
+        tmp.path(),
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         tmp.path(),
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -414,6 +430,16 @@ fn is_ancestor_recognizes_linear_ancestry() {
 fn build_tracked_stack_with_bare_remote() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     jj(tmp.path(), &["git", "init", "--colocate"]);
+    jj(
+        tmp.path(),
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         tmp.path(),
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -1400,6 +1426,16 @@ fn orphan_untracked_phase_tracks_local_bookmark_with_matching_remote_ref() {
     jj(cwd, &["git", "init", "--colocate"]);
     jj(
         cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
+    jj(
+        cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
     );
     jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
@@ -1541,6 +1577,16 @@ fn orphan_untracked_phase_skips_pre_push_wip_bookmark() {
         .output()
         .expect("git init --bare must succeed");
     jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
