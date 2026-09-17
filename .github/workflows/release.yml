@@ -364,30 +364,7 @@ jobs:
           # Main can advance while the release builds artifacts. Rebase the
           # formula bump over the latest main immediately before pushing so
           # the bot push stays a fast-forward instead of leaving the tap stale.
-          max_attempts=3
-          for attempt in $(seq 1 "$max_attempts"); do
-              echo "tap push attempt ${attempt}/${max_attempts}"
-              git fetch origin main:refs/remotes/origin/main
-              git rebase origin/main
-              push_log="$RUNNER_TEMP/tap-push.log"
-              if git push origin HEAD:main 2>&1 | tee "$push_log"; then
-                  rm -f "$push_log"
-                  exit 0
-              else
-                  push_status=$?
-              fi
-              if ! grep -q "non-fast-forward" "$push_log"; then
-                  echo "error: tap push failed for a reason other than non-fast-forward" >&2
-                  rm -f "$push_log"
-                  exit "$push_status"
-              fi
-              rm -f "$push_log"
-              if [ "$attempt" -eq "$max_attempts" ]; then
-                  echo "error: tap push was rejected as non-fast-forward after ${max_attempts} attempts" >&2
-                  exit 1
-              fi
-              echo "tap push rejected as non-fast-forward; retrying"
-          done
+          python3 "$GITHUB_WORKSPACE/.github/scripts/push-tap.py"
 
   # ----- Validate the freshly published tap installs end-to-end.
   validate-tap:
