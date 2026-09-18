@@ -32,7 +32,7 @@
     "ci:test".exec =
       "cargo nextest run --no-fail-fast --no-tests=warn -E 'not (binary(gh_live) | binary(gt_submit_live) | binary(links_live))'";
     "ci:script".exec =
-      "python3 .github/scripts/test_bump-formulae.py && python3 .github/scripts/test_push-tap.py && cd scripts/setup-live-test-fixture && bun install --frozen-lockfile && bunx biome check . && bunx tsc --noEmit && bun test";
+      "python3 .github/scripts/test_bump-formulae.py && python3 .github/scripts/test_push-tap.py && cd scripts/setup-live-test-fixture && bun install --frozen-lockfile && ./node_modules/.bin/biome check . && bunx tsc --noEmit && bun test";
     # Live suite — opt-in, never in the ci: gate. Needs JJ_GT_LIVE_* env + gh auth + a fixture
     # repo. Namespaced (live:test) because devenv rejects a bare task name — same rule as ci:*.
     "live:test" = {
