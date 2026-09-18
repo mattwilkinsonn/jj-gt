@@ -40,12 +40,19 @@ fn jj(cwd: &Path, args: &[&str]) {
 }
 
 fn jj_capture(cwd: &Path, args: &[&str]) -> String {
-    let out = Command::new("jj")
+    jj_capture_with_env(cwd, args, None)
+}
+
+fn jj_capture_with_env(cwd: &Path, args: &[&str], config_home: Option<&Path>) -> String {
+    let mut command = Command::new("jj");
+    command
         .env("JJ_CONFIG", "/dev/null")
         .args(args)
-        .current_dir(cwd)
-        .output()
-        .unwrap();
+        .current_dir(cwd);
+    if let Some(config_home) = config_home {
+        command.env("XDG_CONFIG_HOME", config_home).env("HOME", cwd);
+    }
+    let out = command.output().unwrap();
     assert!(
         out.status.success(),
         "jj {args:?} failed: {}\n{}",
@@ -53,6 +60,41 @@ fn jj_capture(cwd: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr),
     );
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+
+#[test]
+fn jj_spawn_ignores_hostile_user_config() {
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let config_home = tmp.path().join("config");
+    let jj_config_dir = config_home.join("jj");
+    std::fs::create_dir_all(&jj_config_dir).unwrap();
+    std::fs::write(
+        jj_config_dir.join("config.toml"),
+        "[revset-aliases]\n\"immutable_heads()\" = \"all()\"\n",
+    )
+    .unwrap();
+
+    let hostile = Command::new("jj")
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("HOME", tmp.path())
+        .args(["config", "get", "revset-aliases.\"immutable_heads()\""])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(hostile.status.success());
+    assert_eq!(String::from_utf8_lossy(&hostile.stdout).trim(), "all()");
+    let isolated = jj_capture_with_env(
+        tmp.path(),
+        &["config", "get", "revset-aliases.\"immutable_heads()\""],
+        Some(&config_home),
+    );
+    assert_eq!(isolated.trim(), "builtin_immutable_heads()");
 }
 
 /// Build a fixture jj repo with this shape:
