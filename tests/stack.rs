@@ -81,6 +81,7 @@ fn jj_spawn_ignores_hostile_user_config() {
     .unwrap();
 
     let hostile = Command::new("jj")
+        .env_remove("JJ_CONFIG")
         .env("XDG_CONFIG_HOME", &config_home)
         .env("HOME", tmp.path())
         .args(["config", "get", "revset-aliases.\"immutable_heads()\""])
