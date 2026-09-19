@@ -62,7 +62,6 @@ fn jj_capture_with_env(cwd: &Path, args: &[&str], config_home: Option<&Path>) ->
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-
 #[test]
 fn jj_spawn_ignores_hostile_user_config() {
     if !jj_available() {
