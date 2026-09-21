@@ -117,7 +117,13 @@ fn jj_spawn_ignores_hostile_user_config_child() {
     assert!(remote_status.success());
     jj(
         &cwd,
-        &["git", "remote", "add", "origin", remote.path().to_str().unwrap()],
+        &[
+            "git",
+            "remote",
+            "add",
+            "origin",
+            remote.path().to_str().unwrap(),
+        ],
     );
     jj(
         &cwd,
