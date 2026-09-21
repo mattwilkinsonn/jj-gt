@@ -115,8 +115,14 @@ fn jj_spawn_ignores_hostile_user_config_child() {
         .status()
         .unwrap();
     assert!(remote_status.success());
-    jj(&cwd, &["git", "remote", "add", "origin", remote.path().to_str().unwrap()]);
-    jj(&cwd, &["git", "push", "--bookmark", "child", "--remote", "origin"]);
+    jj(
+        &cwd,
+        &["git", "remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    jj(
+        &cwd,
+        &["git", "push", "--bookmark", "child", "--remote", "origin"],
+    );
     let jj_cli = JjCli::new(cwd);
     jj_gt::jj::track_bookmark_on_remote(&jj_cli, "child", "origin").unwrap();
     assert!(jj_gt::jj::rebase(&jj_cli, "child", "side").is_ok());
@@ -143,7 +149,11 @@ fn jj_spawn_ignores_hostile_user_config() {
     .unwrap();
 
     let status = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "jj_spawn_ignores_hostile_user_config", "--nocapture"])
+        .args([
+            "--exact",
+            "jj_spawn_ignores_hostile_user_config",
+            "--nocapture",
+        ])
         .env("JJ_GT_HOSTILE_CONFIG_CHILD", "1")
         .env("JJ_CONFIG", &hostile)
         .current_dir(tmp.path())
