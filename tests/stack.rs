@@ -84,12 +84,20 @@ fn jj_spawn_ignores_hostile_user_config_child() {
     );
     assert_eq!(isolated.trim(), "builtin_immutable_heads()");
 
-    // The library wrapper inherits the hostile environment unless this
-    // isolated child clears it after the control assertion.
-    // SAFETY: this child process is dedicated to this test and cannot race
-    // the parent test process or any sibling test process.
-    unsafe { std::env::set_var("JJ_CONFIG", "/dev/null") };
+    // The JjCli path must retain the hostile inherited JJ_CONFIG. The
+    // repo-local alias used by fixtures makes the mutation legal without
+    // changing the process environment.
     jj(&cwd, &["git", "init", "--colocate"]);
+    jj(
+        &cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         &cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
