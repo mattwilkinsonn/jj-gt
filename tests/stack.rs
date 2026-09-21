@@ -62,39 +62,86 @@ fn jj_capture_with_env(cwd: &Path, args: &[&str], config_home: Option<&Path>) ->
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+fn jj_spawn_ignores_hostile_user_config_child() {
+    assert!(jj_available());
+    let cwd = std::env::current_dir().unwrap();
+
+    // The child inherits a hostile, non-null JJ_CONFIG. Prove that the
+    // unsanitized control really sees the hostile immutable_heads().
+    let control = Command::new("jj")
+        .args(["config", "get", "revset-aliases.\"immutable_heads()\""])
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+    assert!(control.status.success());
+    assert_eq!(String::from_utf8_lossy(&control.stdout).trim(), "all()");
+
+    // The direct test helper must override the inherited config.
+    let isolated = jj_capture_with_env(
+        &cwd,
+        &["config", "get", "revset-aliases.\"immutable_heads()\""],
+        None,
+    );
+    assert_eq!(isolated.trim(), "builtin_immutable_heads()");
+
+    // The library wrapper inherits the hostile environment unless this
+    // isolated child clears it after the control assertion.
+    // SAFETY: this child process is dedicated to this test and cannot race
+    // the parent test process or any sibling test process.
+    unsafe { std::env::set_var("JJ_CONFIG", "/dev/null") };
+    jj(&cwd, &["git", "init", "--colocate"]);
+    jj(
+        &cwd,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(&cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(&cwd, &["describe", "-m", "root commit"]);
+    jj(&cwd, &["bookmark", "create", "main", "-r", "@"]);
+    jj(&cwd, &["new", "-m", "side change"]);
+    jj(&cwd, &["bookmark", "create", "side", "-r", "@"]);
+    jj(&cwd, &["new", "main", "-m", "child change"]);
+    jj(&cwd, &["bookmark", "create", "child", "-r", "@"]);
+    let remote = tempfile::tempdir().unwrap();
+    let remote_status = Command::new("git")
+        .args(["init", "--bare", remote.path().to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(remote_status.success());
+    jj(&cwd, &["git", "remote", "add", "origin", remote.path().to_str().unwrap()]);
+    jj(&cwd, &["git", "push", "--bookmark", "child", "--remote", "origin"]);
+    let jj_cli = JjCli::new(cwd);
+    jj_gt::jj::track_bookmark_on_remote(&jj_cli, "child", "origin").unwrap();
+    assert!(jj_gt::jj::rebase(&jj_cli, "child", "side").is_ok());
+}
+
 #[test]
 fn jj_spawn_ignores_hostile_user_config() {
+    if std::env::var_os("JJ_GT_HOSTILE_CONFIG_CHILD").is_some() {
+        jj_spawn_ignores_hostile_user_config_child();
+        return;
+    }
+
     if !jj_available() {
         eprintln!("skipping: jj not on PATH");
         return;
     }
 
     let tmp = tempfile::tempdir().unwrap();
-    let config_home = tmp.path().join("config");
-    let jj_config_dir = config_home.join("jj");
-    std::fs::create_dir_all(&jj_config_dir).unwrap();
+    let hostile = tmp.path().join("hostile.toml");
     std::fs::write(
-        jj_config_dir.join("config.toml"),
+        &hostile,
         "[revset-aliases]\n\"immutable_heads()\" = \"all()\"\n",
     )
     .unwrap();
 
-    let hostile = Command::new("jj")
-        .env_remove("JJ_CONFIG")
-        .env("XDG_CONFIG_HOME", &config_home)
-        .env("HOME", tmp.path())
-        .args(["config", "get", "revset-aliases.\"immutable_heads()\""])
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "jj_spawn_ignores_hostile_user_config", "--nocapture"])
+        .env("JJ_GT_HOSTILE_CONFIG_CHILD", "1")
+        .env("JJ_CONFIG", &hostile)
         .current_dir(tmp.path())
-        .output()
+        .status()
         .unwrap();
-    assert!(hostile.status.success());
-    assert_eq!(String::from_utf8_lossy(&hostile.stdout).trim(), "all()");
-    let isolated = jj_capture_with_env(
-        tmp.path(),
-        &["config", "get", "revset-aliases.\"immutable_heads()\""],
-        Some(&config_home),
-    );
-    assert_eq!(isolated.trim(), "builtin_immutable_heads()");
+    assert!(status.success());
 }
 
 /// Build a fixture jj repo with this shape:
