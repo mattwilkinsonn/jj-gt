@@ -14,14 +14,19 @@ use jj_gt::stack::{BookmarkOrTrunk, derive_parents, find_tip};
 
 fn jj_available() -> bool {
     Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .arg("--version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
+// The fixtures push bookmarks to a local remote, so the commits these tests
+// rewrite are `remote_bookmarks()`; a developer's `immutable_heads()` alias
+// would mark them immutable. Scrub user config so spawned jj ignores it.
 fn jj(cwd: &Path, args: &[&str]) {
     let out = Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -36,6 +41,7 @@ fn jj(cwd: &Path, args: &[&str]) {
 
 fn jj_capture(cwd: &Path, args: &[&str]) -> String {
     let out = Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -61,6 +67,16 @@ fn jj_capture(cwd: &Path, args: &[&str]) -> String {
 fn build_linear_stack_fixture() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     jj(tmp.path(), &["git", "init", "--colocate"]);
+    jj(
+        tmp.path(),
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         tmp.path(),
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -122,6 +138,16 @@ fn bookmark_on_trunk_resolves_to_trunk_parent() {
     }
     let tmp = tempfile::tempdir().unwrap();
     jj(tmp.path(), &["git", "init", "--colocate"]);
+    jj(
+        tmp.path(),
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         tmp.path(),
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -194,6 +220,7 @@ fn bookmarks_in_revset_excludes_remote_only_refs() {
 
     // Make jj see the remote-tracking ref.
     let status = std::process::Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args(["git", "import"])
         .current_dir(tmp.path())
         .status()
@@ -264,6 +291,7 @@ fn derive_parents_skips_remote_only_collider() {
         .expect("git update-ref");
     assert!(status.success());
     let status = std::process::Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args(["git", "import"])
         .current_dir(tmp.path())
         .status()
@@ -421,6 +449,16 @@ fn orphan_rebase_moves_full_multi_commit_range() {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
     jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -680,6 +718,16 @@ fn expand_ancestors_for_submit_single_on_trunk_keeps_just_tip() {
     jj(cwd, &["git", "init", "--colocate"]);
     jj(
         cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
+    jj(
+        cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
     );
     jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
@@ -786,6 +834,16 @@ fn build_single_commit_workspace() -> (tempfile::TempDir, JjCli) {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
     jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -909,6 +967,16 @@ fn fetch_orphan_rebase_defers_when_rebase_would_conflict() {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
     jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -1054,6 +1122,16 @@ fn orphan_rebase_phase_defers_via_op_restore_on_conflict() {
     jj(cwd, &["git", "init", "--colocate"]);
     jj(
         cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
+    jj(
+        cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
     );
     jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
@@ -1188,6 +1266,16 @@ fn orphan_rebase_phase_emits_bookmark_conflicted_when_target_has_divergent_heads
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
     jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -1347,6 +1435,16 @@ fn orphan_rebase_phase_reanchors_child_when_parent_moved_sideways_on_remote() {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
     jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -1599,6 +1697,16 @@ fn orphan_rebase_phase_does_not_double_rebase_when_sideways_parent_also_deleted_
     jj(cwd, &["git", "init", "--colocate"]);
     jj(
         cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
+    jj(
+        cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
     );
     jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
@@ -1818,6 +1926,16 @@ fn orphan_rebase_phase_emits_no_op_when_bookmark_already_advanced_past_deleted_p
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
     jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &[
+            "config",
+            "set",
+            "--repo",
+            "revset-aliases.\"immutable_heads()\"",
+            "none()",
+        ],
+    );
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
