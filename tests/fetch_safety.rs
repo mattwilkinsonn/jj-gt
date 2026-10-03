@@ -78,6 +78,7 @@ fn jj_available() -> bool {
         .unwrap_or(false)
 }
 
+// Direct jj commands ignore developer config; JjCli keeps its inherited config.
 fn jj(cwd: &Path, args: &[&str]) {
     let out = Command::new("jj")
         .env("JJ_CONFIG", "/dev/null")

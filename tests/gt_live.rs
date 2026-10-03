@@ -47,6 +47,7 @@ fn isolate_graphite_config(tmp: &Path) {
     }
 }
 
+// Direct jj commands ignore developer config; JjCli keeps its inherited config.
 fn jj(cwd: &Path, args: &[&str]) {
     let out = Command::new("jj")
         .env("JJ_CONFIG", "/dev/null")
