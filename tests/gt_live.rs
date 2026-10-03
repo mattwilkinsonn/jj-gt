@@ -10,6 +10,7 @@
 //! when `gt` (or `jj`) isn't on PATH so they don't fail in
 //! environments that haven't installed them yet.
 
+mod support;
 use std::path::Path;
 use std::process::Command;
 
@@ -46,9 +47,6 @@ fn isolate_graphite_config(tmp: &Path) {
     }
 }
 
-// The fixtures push bookmarks to a local remote, so the commits these tests
-// rewrite are `remote_bookmarks()`; a developer's `immutable_heads()` alias
-// would mark them immutable. Scrub user config so spawned jj ignores it.
 fn jj(cwd: &Path, args: &[&str]) {
     let out = Command::new("jj")
         .env("JJ_CONFIG", "/dev/null")
@@ -108,17 +106,7 @@ fn gt_capture(cwd: &Path, args: &[&str]) -> String {
 fn build_three_stack_fixture() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     isolate_graphite_config(tmp.path());
-    jj(tmp.path(), &["git", "init", "--colocate"]);
-    jj(
-        tmp.path(),
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(tmp.path());
     jj(
         tmp.path(),
         &["config", "set", "--repo", "user.email", "test@example.com"],

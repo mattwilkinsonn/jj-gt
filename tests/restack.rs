@@ -5,6 +5,7 @@
 //! the default `cargo test` set without forcing a hard dep on jj
 //! in CI matrices that haven't installed it yet.
 
+mod support;
 use std::path::Path;
 use std::process::Command;
 
@@ -19,9 +20,6 @@ fn jj_available() -> bool {
         .unwrap_or(false)
 }
 
-// The fixtures push bookmarks to a local remote, so the commits these tests
-// rewrite are `remote_bookmarks()`; a developer's `immutable_heads()` alias
-// would mark them immutable. Scrub user config so spawned jj ignores it.
 fn jj(cwd: &Path, args: &[&str]) {
     let out = Command::new("jj")
         .env("JJ_CONFIG", "/dev/null")
@@ -57,17 +55,7 @@ fn jj(cwd: &Path, args: &[&str]) {
 fn build_two_stack_fixture() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
-    jj(cwd, &["git", "init", "--colocate"]);
-    jj(
-        cwd,
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -482,17 +470,7 @@ fn run_restack_reports_nonzero_conflict_count_when_rebase_conflicts() {
     }
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
-    jj(cwd, &["git", "init", "--colocate"]);
-    jj(
-        cwd,
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],

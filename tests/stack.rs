@@ -6,6 +6,7 @@
 //! the default `cargo test` set without forcing a hard dep on jj in
 //! CI matrices that haven't installed it yet.
 
+mod support;
 use std::path::Path;
 use std::process::Command;
 
@@ -21,9 +22,6 @@ fn jj_available() -> bool {
         .unwrap_or(false)
 }
 
-// The fixtures push bookmarks to a local remote, so the commits these tests
-// rewrite are `remote_bookmarks()`; a developer's `immutable_heads()` alias
-// would mark them immutable. Scrub user config so spawned jj ignores it.
 fn jj(cwd: &Path, args: &[&str]) {
     let out = Command::new("jj")
         .env("JJ_CONFIG", "/dev/null")
@@ -87,17 +85,7 @@ fn jj_spawn_ignores_hostile_user_config_child() {
     // The JjCli path must retain the hostile inherited JJ_CONFIG. The
     // repo-local alias used by fixtures makes the mutation legal without
     // changing the process environment.
-    jj(&cwd, &["git", "init", "--colocate"]);
-    jj(
-        &cwd,
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(&cwd);
     jj(
         &cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -179,17 +167,7 @@ fn jj_spawn_ignores_hostile_user_config() {
 /// ```
 fn build_linear_stack_fixture() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
-    jj(tmp.path(), &["git", "init", "--colocate"]);
-    jj(
-        tmp.path(),
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(tmp.path());
     jj(
         tmp.path(),
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -250,17 +228,7 @@ fn bookmark_on_trunk_resolves_to_trunk_parent() {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
-    jj(tmp.path(), &["git", "init", "--colocate"]);
-    jj(
-        tmp.path(),
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(tmp.path());
     jj(
         tmp.path(),
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -561,17 +529,7 @@ fn orphan_rebase_moves_full_multi_commit_range() {
     }
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
-    jj(cwd, &["git", "init", "--colocate"]);
-    jj(
-        cwd,
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -828,17 +786,7 @@ fn expand_ancestors_for_submit_single_on_trunk_keeps_just_tip() {
     }
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
-    jj(cwd, &["git", "init", "--colocate"]);
-    jj(
-        cwd,
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -946,17 +894,7 @@ fn derive_parents_strict_propagates_revset_error_for_missing_bookmark() {
 fn build_single_commit_workspace() -> (tempfile::TempDir, JjCli) {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
-    jj(cwd, &["git", "init", "--colocate"]);
-    jj(
-        cwd,
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -1079,17 +1017,7 @@ fn fetch_orphan_rebase_defers_when_rebase_would_conflict() {
     }
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
-    jj(cwd, &["git", "init", "--colocate"]);
-    jj(
-        cwd,
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -1232,17 +1160,7 @@ fn orphan_rebase_phase_defers_via_op_restore_on_conflict() {
     }
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
-    jj(cwd, &["git", "init", "--colocate"]);
-    jj(
-        cwd,
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -1378,17 +1296,7 @@ fn orphan_rebase_phase_emits_bookmark_conflicted_when_target_has_divergent_heads
     }
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
-    jj(cwd, &["git", "init", "--colocate"]);
-    jj(
-        cwd,
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -1547,17 +1455,7 @@ fn orphan_rebase_phase_reanchors_child_when_parent_moved_sideways_on_remote() {
     }
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
-    jj(cwd, &["git", "init", "--colocate"]);
-    jj(
-        cwd,
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -1807,17 +1705,7 @@ fn orphan_rebase_phase_does_not_double_rebase_when_sideways_parent_also_deleted_
     }
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
-    jj(cwd, &["git", "init", "--colocate"]);
-    jj(
-        cwd,
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -2038,17 +1926,7 @@ fn orphan_rebase_phase_emits_no_op_when_bookmark_already_advanced_past_deleted_p
     }
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
-    jj(cwd, &["git", "init", "--colocate"]);
-    jj(
-        cwd,
-        &[
-            "config",
-            "set",
-            "--repo",
-            "revset-aliases.\"immutable_heads()\"",
-            "none()",
-        ],
-    );
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
