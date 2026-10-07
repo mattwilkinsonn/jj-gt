@@ -15,7 +15,7 @@ jobs:
       contents: read
       id-token: write # the Determinate Nix action needs OIDC
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: mattwilkinsonn/dev-shared/setup-devenv@v1
       - name: devenv tasks run ci
         run: devenv shell -- devenv tasks run ci
