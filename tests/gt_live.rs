@@ -10,6 +10,7 @@
 //! when `gt` (or `jj`) isn't on PATH so they don't fail in
 //! environments that haven't installed them yet.
 
+mod support;
 use std::path::Path;
 use std::process::Command;
 
@@ -46,8 +47,10 @@ fn isolate_graphite_config(tmp: &Path) {
     }
 }
 
+// Direct jj commands ignore developer config; JjCli keeps its inherited config.
 fn jj(cwd: &Path, args: &[&str]) {
     let out = Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -104,7 +107,7 @@ fn gt_capture(cwd: &Path, args: &[&str]) -> String {
 fn build_three_stack_fixture() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     isolate_graphite_config(tmp.path());
-    jj(tmp.path(), &["git", "init", "--colocate"]);
+    support::init_jj_repo(tmp.path());
     jj(
         tmp.path(),
         &["config", "set", "--repo", "user.email", "test@example.com"],

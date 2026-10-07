@@ -5,6 +5,7 @@
 //! the default `cargo test` set without forcing a hard dep on jj in
 //! CI matrices that haven't installed it yet.
 
+mod support;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Barrier, Mutex};
@@ -70,14 +71,17 @@ impl Drop for EnvVarGuard {
 
 fn jj_available() -> bool {
     Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .arg("--version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
+// Direct jj commands ignore developer config; JjCli keeps its inherited config.
 fn jj(cwd: &Path, args: &[&str]) {
     let out = Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -110,6 +114,7 @@ fn git(cwd: &Path, args: &[&str]) {
 
 fn jj_capture(cwd: &Path, args: &[&str]) -> String {
     let out = Command::new("jj")
+        .env("JJ_CONFIG", "/dev/null")
         .args(args)
         .current_dir(cwd)
         .output()
@@ -127,7 +132,7 @@ fn jj_capture(cwd: &Path, args: &[&str]) -> String {
 /// Used by every test in this file.
 fn build_workspace() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
-    jj(tmp.path(), &["git", "init", "--colocate"]);
+    support::init_jj_repo(tmp.path());
     jj(
         tmp.path(),
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -413,7 +418,7 @@ fn is_ancestor_recognizes_linear_ancestry() {
 /// cleans up together.
 fn build_tracked_stack_with_bare_remote() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
-    jj(tmp.path(), &["git", "init", "--colocate"]);
+    support::init_jj_repo(tmp.path());
     jj(
         tmp.path(),
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -1397,7 +1402,7 @@ fn orphan_untracked_phase_tracks_local_bookmark_with_matching_remote_ref() {
     }
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
-    jj(cwd, &["git", "init", "--colocate"]);
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
@@ -1540,7 +1545,7 @@ fn orphan_untracked_phase_skips_pre_push_wip_bookmark() {
         .arg(bare_remote.path())
         .output()
         .expect("git init --bare must succeed");
-    jj(cwd, &["git", "init", "--colocate"]);
+    support::init_jj_repo(cwd);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
