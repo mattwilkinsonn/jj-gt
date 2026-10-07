@@ -87,7 +87,7 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.meta.outputs.tag }}
 
@@ -163,7 +163,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.meta.outputs.tag }}
 
@@ -245,7 +245,7 @@ jobs:
       #   - Installed on:  this repo + mattwilkinsonn/homebrew-tap
       #                    (the formula bump commits land in the tap)
       #   - Bypass actor:  main branch ruleset
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ vars.RELEASE_BOT_APP_ID }}
@@ -258,7 +258,7 @@ jobs:
             jj-gt
             homebrew-tap
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # First checkout: this repo, solely to supply
           # .github/scripts/bump-formulae.py to the rewrite step below. The
@@ -270,7 +270,7 @@ jobs:
           # Kept on the App token so both checkouts share one credential.
           token: ${{ steps.app-token.outputs.token }}
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Second checkout: the consolidated tap repo, where the formula
           # now lives. The bump rewrites tap/Formula/jj-gt.rb and pushes to
@@ -406,7 +406,7 @@ jobs:
     timeout-minutes: 10
     if: needs.meta.outputs.prerelease == 'false'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.meta.outputs.tag }}
 
